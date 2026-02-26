@@ -12,6 +12,9 @@ struct SimMetrics
     float meanFitness = 0.f;
     float fitnessStd = 0.f;
     float trophicStability = 0.f;
+    float cooperationIndex = 0.f;
+    float diseaseLoad = 0.f;
+    float climateStress = 0.f;
     int extinctions = 0;
     int speciations = 0;
 };
@@ -83,6 +86,19 @@ struct Sim
                 }
     }
 
+    static float genomeCompatibility(const Organism& a, const Organism& b)
+    {
+        const uint64_t d = a.geneticSignature ^ b.geneticSignature;
+        const float pop = static_cast<float>(__builtin_popcountll(d));
+        return clampf(1.f - pop / 64.f, 0.f, 1.f);
+    }
+
+    float localDensity(const Vec3& p) const
+    {
+        nearbyOrganisms(p, nearbyScratch);
+        return clampf(static_cast<float>(nearbyScratch.size()) / 28.f, 0.f, 2.5f);
+    }
+
     void seedInitial(const int n)
     {
         organisms.clear();
@@ -98,6 +114,9 @@ struct Sim
                 if (rndf() < 0.5f) o.genome = mutateGenome(o.genome, 0.2f);
             }
             o.pheno = interpretGenome(o.genome, 0.5f, 0.5f, 0.2f);
+            o.geneticSignature = genomeSignature(o.genome);
+            o.matePreference = rndf(0.f, 1.f);
+            o.socialDrive = rndf(0.f, 1.f);
             o.pos = {rndf(-25.f, 25.f), rndf(-25.f, 25.f), rndf(-25.f, 25.f)};
             o.vel = {rndf(-0.2f, 0.2f), rndf(-0.2f, 0.2f), rndf(-0.2f, 0.2f)};
             o.energy = rndf(6.f, 12.f);
@@ -269,22 +288,41 @@ struct Sim
         for (int i = 0; i < static_cast<int>(organisms.size()); ++i)
         {
             Organism& a = organisms[i];
-            if (!a.alive || a.pheno.aggression < 0.30f || a.energy < 2.f) continue;
+            if (!a.alive) continue;
             nearbyOrganisms(a.pos, nearbyScratch);
             for (int j : nearbyScratch)
             {
                 if (i == j) continue;
                 Organism& b = organisms[j];
                 if (!b.alive) continue;
+                const float d2 = len2(b.pos - a.pos);
+                if (d2 > 16.f) continue;
+
+                const float contagion = (a.pathogenLoad + b.pathogenLoad) * 0.0016f * dt;
+                if (contagion > 0.f)
+                {
+                    a.pathogenLoad += contagion * (1.f - 0.45f * a.pheno.diseaseResistance);
+                    b.pathogenLoad += contagion * (1.f - 0.45f * b.pheno.diseaseResistance);
+                }
+
+                const bool kinLike = (a.deme == b.deme) || genomeCompatibility(a, b) > 0.75f;
+                if (kinLike && a.energy > 3.5f && b.energy < 2.5f)
+                {
+                    const float share = 0.02f * a.pheno.socialAffinity * dt * 20.f;
+                    const float transfer = std::min(share, a.energy - 3.2f);
+                    if (transfer > 0.f) { a.energy -= transfer; b.energy += transfer * 0.9f; }
+                }
+
+                if (a.pheno.aggression < 0.30f || a.energy < 2.f) continue;
                 const float huntRange = 2.5f + 0.08f * static_cast<float>(a.cells.size());
-                if (len2(b.pos - a.pos) > huntRange * huntRange) continue;
+                if (d2 > huntRange * huntRange) continue;
                 const float aPower = a.pheno.aggression + 0.018f * static_cast<float>(a.cells.size());
                 const float bDef = 0.5f * b.pheno.toxinResistance + 0.010f * static_cast<float>(b.cells.size());
                 const float damage = clampf((aPower - 0.4f * bDef + 0.2f * env.predationPressure(b.pos)) * dt * 4.2f, 0.f, 0.7f);
                 if (damage <= 0.f) continue;
                 b.energy -= damage;
                 b.pathogenLoad += damage * 0.05f;
-                a.energy += damage * 0.5f;
+                a.energy += damage * (0.45f + 0.15f * a.pheno.microbiomeEfficiency);
             }
         }
     }
@@ -296,7 +334,9 @@ struct Sim
         if (B <= 0.0001f) return;
         const float request = o.pheno.scavenging * (0.02f + 0.005f * static_cast<float>(o.cells.size())) * dt * 20.f;
         const float gain = std::min(B, request) * 0.9f;
-        o.energy += gain * 0.8f;
+        const float microbiomeGain = 0.75f + 0.5f * o.pheno.microbiomeEfficiency * o.microbiomeHealth;
+        o.energy += gain * microbiomeGain;
+        o.microbiomeHealth = clampf(o.microbiomeHealth + gain * 0.002f - 0.001f * o.pathogenLoad, 0.05f, 1.4f);
         env.consumeBiomassNear(com, gain);
     }
 
@@ -341,7 +381,7 @@ struct Sim
 
     bool attemptReproduction(Organism& o, std::vector<Organism>& newborns)
     {
-        if (!(o.energy > o.pheno.splitThreshold && o.age > 6.f && o.cells.size() >= 2)) return false;
+        if (!(o.energy > o.pheno.splitThreshold && o.age > 6.f && o.cells.size() >= 2 && o.reproductionCooldown <= 0.f)) return false;
         Organism child;
         child.id = g_nextId++;
         const bool sexual = rndf() < clampf(0.25f + 0.55f * o.pheno.reproductiveFlex - 0.25f * o.energyDebt, 0.05f, 0.85f);
@@ -349,8 +389,15 @@ struct Sim
         {
             int mateIdx = -1;
             nearbyOrganisms(o.pos, nearbyScratch);
+            float bestScore = -1.f;
             for (int idx : nearbyScratch)
-                if (organisms[idx].id != o.id && organisms[idx].alive && organisms[idx].deme != o.deme && organisms[idx].energy > 5.f) { mateIdx = idx; break; }
+            {
+                if (organisms[idx].id == o.id || !organisms[idx].alive || organisms[idx].energy <= 5.f) continue;
+                const float comp = genomeCompatibility(o, organisms[idx]);
+                const float prefAlign = 1.f - std::abs(o.matePreference - comp);
+                const float score = 0.55f * comp + 0.45f * prefAlign;
+                if (score > bestScore) { bestScore = score; mateIdx = idx; }
+            }
             if (mateIdx >= 0)
             {
                 Organism& mate = organisms[mateIdx];
@@ -371,6 +418,10 @@ struct Sim
             child.deme = o.deme;
         }
         child.pheno = interpretGenome(child.genome, env.temperature(o.pos), env.nutrient(o.pos), env.toxin(o.pos));
+        child.geneticSignature = genomeSignature(child.genome);
+        child.matePreference = clampf((o.matePreference + rndf(-0.08f, 0.08f)), 0.f, 1.f);
+        child.socialDrive = clampf((o.socialDrive + rndf(-0.08f, 0.08f)), 0.f, 1.f);
+        child.microbiomeHealth = clampf(o.microbiomeHealth * rndf(0.7f, 1.05f), 0.05f, 1.2f);
         child.pos = o.pos + normalize(Vec3{rndf(-1, 1), rndf(-1, 1), rndf(-1, 1)}) * rndf(2.f, 6.f);
         child.vel = o.vel + Vec3{rndf(-0.4f, 0.4f), rndf(-0.4f, 0.4f), rndf(-0.4f, 0.4f)};
         child.energy = o.energy * 0.36f;
@@ -397,6 +448,7 @@ struct Sim
         {
             Spring s; s.a = i; s.b = rndi(0, i - 1); s.restLen = clampf(len(child.cells[i].localPos - child.cells[s.b].localPos), 0.45f, 2.6f); s.stiffness = 5.f + 6.f * child.pheno.adhesionBias; child.springs.push_back(s);
         }
+        o.reproductionCooldown = clampf(8.f + 5.f * (1.f - o.pheno.reproductiveFlex), 3.f, 18.f);
         newborns.push_back(std::move(child));
         return true;
     }
@@ -412,8 +464,13 @@ struct Sim
         const float N = env.nutrient(com), L = env.light(com), X = env.toxin(com);
         const float temp = env.temperature(com);
         const float humid = env.humidity(com);
-        const float stress = clampf(0.6f * X + 0.4f * (1.f - humid) + 0.2f * env.predationPressure(com), 0.f, 2.f);
+        float thermalMismatch = std::abs(temp - 0.55f) * (1.5f - o.pheno.thermalTolerance);
+        float hydricMismatch = std::max(0.f, 0.5f - humid) * (1.5f - o.pheno.hydricTolerance);
+        float stress = clampf(0.5f * X + 0.35f * hydricMismatch + 0.25f * thermalMismatch + 0.2f * env.predationPressure(com) + 0.25f * env.climateShock, 0.f, 2.8f);
         o.pheno = interpretGenome(o.genome, temp, N, stress);
+        thermalMismatch = std::abs(temp - 0.55f) * (1.5f - o.pheno.thermalTolerance);
+        hydricMismatch = std::max(0.f, 0.5f - humid) * (1.5f - o.pheno.hydricTolerance);
+        stress = clampf(0.5f * X + 0.35f * hydricMismatch + 0.25f * thermalMismatch + 0.2f * env.predationPressure(com) + 0.25f * env.climateShock, 0.f, 2.8f);
         if (o.stage == LifeStage::Juvenile)
         {
             o.pheno.motorDrive *= 0.98f;
@@ -426,6 +483,7 @@ struct Sim
         }
 
         const Vec3 gN = env.gradN(com), gL = env.gradL(com), gX = env.gradX(com), gB = env.gradB(com), gS = env.signalGradient(com, o.gaitPhase);
+        const float circadian = 0.65f + 0.35f * std::sin(env.time * 0.3f / std::max(0.4f, o.pheno.circadianPeriod));
         Vec3 steer = normalize(gN) * (0.34f * o.pheno.nutrientAffinity) + normalize(gL) * (0.18f * o.pheno.photoAffinity) + normalize(gB) * (0.21f * o.pheno.scavenging) + normalize(gS) * 0.1f - normalize(gX) * (0.48f * (1.2f - clampf(o.pheno.toxinResistance, 0.f, 1.2f))) + hashToVec3(o.id + static_cast<uint64_t>(o.age * 10.0f)) * 0.12f;
         if (len2(steer) < 1e-6f) steer = Vec3{rndf(-1, 1), rndf(-1, 1), rndf(-1, 1)};
         steer = normalize(steer);
@@ -436,7 +494,7 @@ struct Sim
         const Vec3 obstaclePush = normalize(Vec3{-env.obstacleField(com) * com.x, 0.f, -env.obstacleField(com) * com.z});
         const float corridorBoost = env.corridorField(com);
 
-        o.vel += steer * (0.42f * dt);
+        o.vel += steer * (0.42f * dt * circadian);
         o.vel += flow * (0.34f * dt);
         o.vel += gust * dt;
         o.vel += actuation * (0.95f * dt);
@@ -455,17 +513,20 @@ struct Sim
 
         applyDiseaseAndImmunity(o, stress);
 
-        const float uptake = o.pheno.nutrientAffinity * N * (0.05f + 0.010f * static_cast<float>(o.cells.size()));
+        const float crowdPenalty = clampf(localDensity(com) * (1.f - o.pheno.socialAffinity * 0.35f), 0.f, 1.6f);
+        const float uptake = o.pheno.nutrientAffinity * N * (0.05f + 0.010f * static_cast<float>(o.cells.size())) * (1.f - 0.18f * crowdPenalty);
         const float photo = o.pheno.photoAffinity * L * (0.03f + 0.008f * static_cast<float>(o.cells.size()));
         const float toxHit = std::max(0.f, X - 0.7f * o.pheno.toxinResistance) * (0.04f + 0.005f * static_cast<float>(o.cells.size()));
         const float moveCost = 0.015f * len(o.vel) * (1.0f + 0.03f * static_cast<float>(o.cells.size()));
         const float actuationCost = 0.010f * len(actuation) * (0.6f + 0.8f * o.pheno.motorDrive);
         const float maint = o.pheno.baseMetabolism * (1.0f + 0.055f * static_cast<float>(o.cells.size()));
         const float ageDrain = 0.0008f * o.age;
-        const float thermalCost = 0.02f * std::abs(temp - 0.55f) * (1.f + o.pheno.bodyDensity);
+        const float thermalCost = 0.02f * thermalMismatch * (1.f + o.pheno.bodyDensity);
+        const float hydrationCost = 0.018f * hydricMismatch * (1.f + 0.5f * o.pheno.bodyDensity);
         const float immuneCost = 0.02f * o.pathogenLoad * (0.5f + o.pheno.immunity);
         const float stressOxCost = 0.018f * o.oxidativeStress;
-        const float delta = (uptake + photo - toxHit - moveCost - actuationCost - maint - ageDrain - thermalCost - immuneCost - stressOxCost) * dt * 20.f;
+        const float microbiomeTax = 0.016f * (1.1f - o.microbiomeHealth);
+        const float delta = (uptake + photo - toxHit - moveCost - actuationCost - maint - ageDrain - thermalCost - hydrationCost - immuneCost - stressOxCost - microbiomeTax) * dt * 20.f;
         o.energy += delta;
         if (o.energy < 0.f)
         {
@@ -477,26 +538,35 @@ struct Sim
             o.storedEnergy += delta * 0.1f;
             o.energyDebt = std::max(0.f, o.energyDebt - delta * 0.05f);
         }
-        o.oxidativeStress = clampf(o.oxidativeStress * 0.995f + std::max(0.f, moveCost + toxHit - 0.5f * o.pheno.immunity) * 0.01f, 0.f, 2.f);
+        o.oxidativeStress = clampf(o.oxidativeStress * 0.995f + std::max(0.f, moveCost + toxHit + 0.4f * env.climateShock - 0.5f * o.pheno.immunity) * 0.01f, 0.f, 2.f);
+        o.reproductionCooldown = std::max(0.f, o.reproductionCooldown - dt * (0.7f + 0.6f * o.pheno.reproductiveFlex));
+        o.heatStressMemory = clampf(o.heatStressMemory * 0.99f + thermalMismatch * 0.015f, 0.f, 2.f);
+        o.hydrationStressMemory = clampf(o.hydrationStressMemory * 0.99f + hydricMismatch * 0.015f, 0.f, 2.f);
+        o.microbiomeHealth = clampf(o.microbiomeHealth - dt * (0.0012f * X + 0.0008f * o.pathogenLoad), 0.03f, 1.5f);
+        if (toxHit > 0.08f) env.depositToxin(com, toxHit * 0.04f, 4.5f + 0.08f * static_cast<float>(o.cells.size()));
         o.lastReward = clampf(delta, -1.f, 1.f);
 
         digestBiomass(o);
         growOrganism(o);
         attemptReproduction(o, newborns);
 
-        if (o.energy <= -3.f || o.age > o.pheno.maxAge || o.pathogenLoad > 3.2f) o.alive = false;
+        if (o.energy <= -3.f || o.age > o.pheno.maxAge || o.pathogenLoad > 3.2f || o.heatStressMemory > 1.8f) o.alive = false;
     }
 
     void computeMetrics()
     {
         if (organisms.empty()) return;
         float fitSum = 0.f, fitSq = 0.f;
+        float coop = 0.f, disease = 0.f, climate = 0.f;
         std::unordered_map<int, int> demeCount;
         for (const auto& o : organisms)
         {
             const float fitness = std::max(0.f, o.energy + 0.5f * o.storedEnergy - o.energyDebt - 0.4f * o.pathogenLoad);
             fitSum += fitness;
             fitSq += fitness * fitness;
+            coop += clampf(o.pheno.socialAffinity * o.socialDrive, 0.f, 2.f);
+            disease += o.pathogenLoad;
+            climate += 0.5f * (o.heatStressMemory + o.hydrationStressMemory);
             demeCount[o.deme]++;
         }
         const float n = static_cast<float>(organisms.size());
@@ -509,13 +579,16 @@ struct Sim
             metrics.heterozygosity += p * (1.f - p);
         }
         metrics.trophicStability = clampf(1.f - metrics.fitnessStd / std::max(0.1f, metrics.meanFitness + 1.f), 0.f, 1.f);
+        metrics.cooperationIndex = coop / std::max(1.f, n);
+        metrics.diseaseLoad = disease / std::max(1.f, n);
+        metrics.climateStress = climate / std::max(1.f, n);
     }
 
     void exportMetricsIfNeeded()
     {
         if (steps % 200 != 0) return;
         std::ofstream f("sim_metrics.csv", std::ios::app);
-        f << steps << "," << organisms.size() << "," << metrics.heterozygosity << "," << metrics.meanFitness << "," << metrics.fitnessStd << "," << metrics.trophicStability << "," << metrics.extinctions << "," << metrics.speciations << "\n";
+        f << steps << "," << organisms.size() << "," << metrics.heterozygosity << "," << metrics.meanFitness << "," << metrics.fitnessStd << "," << metrics.trophicStability << "," << metrics.cooperationIndex << "," << metrics.diseaseLoad << "," << metrics.climateStress << "," << metrics.extinctions << "," << metrics.speciations << "\n";
     }
 
     void step()
@@ -545,6 +618,9 @@ struct Sim
                 o.id = g_nextId++;
                 o.genome = mutateGenome(makeBaseGenome(), 0.6f);
                 o.pheno = interpretGenome(o.genome, env.temperature({0,0,0}), env.nutrient({0,0,0}), env.toxin({0,0,0}));
+                o.geneticSignature = genomeSignature(o.genome);
+                o.matePreference = rndf(0.f, 1.f);
+                o.socialDrive = rndf(0.f, 1.f);
                 o.pos = {rndf(-20, 20), rndf(-20, 20), rndf(-20, 20)};
                 o.vel = {rndf(-.1f, .1f), rndf(-.1f, .1f), rndf(-.1f, .1f)};
                 o.energy = rndf(6.f, 10.f);
