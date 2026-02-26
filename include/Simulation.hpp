@@ -220,6 +220,14 @@ struct Sim
         }
     }
 
+    static void pruneSprings(Organism& o)
+    {
+        o.springs.erase(std::remove_if(o.springs.begin(), o.springs.end(), [&](const Spring& s)
+        {
+            return s.a < 0 || s.b < 0 || s.a >= static_cast<int>(o.cells.size()) || s.b >= static_cast<int>(o.cells.size()) || s.a == s.b;
+        }), o.springs.end());
+    }
+
     void growOrganism(Organism& o) const
     {
         if (o.cells.size() >= 64 || o.energy < 2.f) return;
@@ -321,17 +329,6 @@ struct Sim
         if (relAge < 0.23f) o.stage = LifeStage::Juvenile;
         else if (relAge < 0.78f) o.stage = LifeStage::Adult;
         else o.stage = LifeStage::Senescent;
-
-        if (o.stage == LifeStage::Juvenile)
-        {
-            o.pheno.motorDrive *= 0.98f;
-            o.pheno.growthBias *= 1.01f;
-        }
-        else if (o.stage == LifeStage::Senescent)
-        {
-            o.pheno.baseMetabolism *= 1.01f;
-            o.pheno.growthBias *= 0.98f;
-        }
     }
 
     void applyDiseaseAndImmunity(Organism& o, const float stress)
@@ -392,6 +389,7 @@ struct Sim
             Cell c = o.cells[idx]; c.localPos *= 0.6f; c.localVel = Vec3{0, 0, 0}; c.age = 0.f;
             child.cells.push_back(c); o.cells.erase(o.cells.begin() + idx);
         }
+        pruneSprings(o);
         if (child.cells.empty()) child.cells.push_back({Vec3{0, 0, 0}, Vec3{0, 0, 0}, 1.f, 0.f, 1.f});
         Vec3 cc{0, 0, 0}; for (const auto& c : child.cells) cc += c.localPos; cc = cc / static_cast<float>(child.cells.size()); for (auto& c : child.cells) c.localPos -= cc;
         child.springs.clear();
@@ -416,6 +414,16 @@ struct Sim
         const float humid = env.humidity(com);
         const float stress = clampf(0.6f * X + 0.4f * (1.f - humid) + 0.2f * env.predationPressure(com), 0.f, 2.f);
         o.pheno = interpretGenome(o.genome, temp, N, stress);
+        if (o.stage == LifeStage::Juvenile)
+        {
+            o.pheno.motorDrive *= 0.98f;
+            o.pheno.growthBias *= 1.01f;
+        }
+        else if (o.stage == LifeStage::Senescent)
+        {
+            o.pheno.baseMetabolism *= 1.01f;
+            o.pheno.growthBias *= 0.98f;
+        }
 
         const Vec3 gN = env.gradN(com), gL = env.gradL(com), gX = env.gradX(com), gB = env.gradB(com), gS = env.signalGradient(com, o.gaitPhase);
         Vec3 steer = normalize(gN) * (0.34f * o.pheno.nutrientAffinity) + normalize(gL) * (0.18f * o.pheno.photoAffinity) + normalize(gB) * (0.21f * o.pheno.scavenging) + normalize(gS) * 0.1f - normalize(gX) * (0.48f * (1.2f - clampf(o.pheno.toxinResistance, 0.f, 1.2f))) + hashToVec3(o.id + static_cast<uint64_t>(o.age * 10.0f)) * 0.12f;

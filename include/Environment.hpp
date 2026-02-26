@@ -2,6 +2,7 @@
 
 #include "maths/Vec3.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 #include <maths/Hash.hpp>
 
@@ -208,11 +209,13 @@ struct Environment
         if (requested <= 0.f || biomassPulses.empty()) return;
         for (auto& pulse : biomassPulses)
         {
+            if (requested <= 0.f) break;
             const float d2 = len2(pos - pulse.pos);
             const float influence = std::exp(-d2 / (2.f * pulse.sigma * pulse.sigma));
             if (influence < 0.02f) continue;
             const float take = std::min(pulse.amount, requested * influence * 0.35f);
             pulse.amount -= take;
+            requested -= take;
         }
     }
 };
