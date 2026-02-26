@@ -328,10 +328,46 @@ int main()
             pts.push_back({com.x, com.y, com.z, 1.f, 1.f, 1.f, 2.3f});
         }
 
-        // Sparse environment visualization points
+        // Environment layer: terrain + ocean + field probes
         if (showEnv)
         {
-            for (int i = 0; i < 220; i++)
+            for (int ix = -24; ix <= 24; ++ix)
+            {
+                for (int iz = -24; iz <= 24; ++iz)
+                {
+                    const float x = static_cast<float>(ix) * 3.2f;
+                    const float z = static_cast<float>(iz) * 3.2f;
+                    const Vec3 query{x, 0.f, z};
+                    const float groundY = sim.env.groundHeight(query);
+                    const float waterY = sim.env.waterSurfaceHeight(query);
+                    const float shore = sim.env.shorelineBlend(Vec3{x, waterY, z});
+
+                    const float slope = std::abs(sim.env.groundHeight(Vec3{x + 0.6f, 0.f, z})
+                        - sim.env.groundHeight(Vec3{x - 0.6f, 0.f, z}))
+                        + std::abs(sim.env.groundHeight(Vec3{x, 0.f, z + 0.6f})
+                            - sim.env.groundHeight(Vec3{x, 0.f, z - 0.6f}));
+
+                    const Vec3 landColor{
+                        clampf(0.14f + 0.22f * slope, 0.f, 1.f),
+                        clampf(0.24f + 0.44f * (1.f - slope * 0.2f) + 0.18f * (1.f - shore), 0.f, 1.f),
+                        clampf(0.10f + 0.14f * (1.f - shore), 0.f, 1.f)
+                    };
+                    pts.push_back({x, groundY, z, landColor.x, landColor.y, landColor.z, 2.0f});
+
+                    if (waterY > groundY - 1.2f)
+                    {
+                        const float foam = clampf((waterY - groundY) / 4.0f, 0.f, 1.f);
+                        const Vec3 waterColor{
+                            clampf(0.06f + 0.18f * foam, 0.f, 1.f),
+                            clampf(0.28f + 0.30f * shore, 0.f, 1.f),
+                            clampf(0.45f + 0.42f * shore, 0.f, 1.f)
+                        };
+                        pts.push_back({x, waterY, z, waterColor.x, waterColor.y, waterColor.z, 2.4f});
+                    }
+                }
+            }
+
+            for (int i = 0; i < 180; i++)
             {
                 const Vec3 p{
                     rndf(-sim.worldRadius, sim.worldRadius),
@@ -346,12 +382,12 @@ int main()
                 const float b = sim.env.biomass(p);
 
                 const Vec3 col{
-                    clampf(0.15f + 0.55f * x, 0.f, 1.f),             // red toxin
-                    clampf(0.12f + 0.55f * n + 0.25f * b, 0.f, 1.f), // green nutrient+biomass
-                    clampf(0.12f + 0.60f * l, 0.f, 1.f)              // blue light
+                    clampf(0.15f + 0.55f * x, 0.f, 1.f),
+                    clampf(0.12f + 0.55f * n + 0.25f * b, 0.f, 1.f),
+                    clampf(0.12f + 0.60f * l, 0.f, 1.f)
                 };
 
-                pts.push_back({p.x, p.y, p.z, col.x, col.y, col.z, 1.8f});
+                pts.push_back({p.x, p.y, p.z, col.x, col.y, col.z, 1.6f});
             }
         }
 
@@ -376,7 +412,7 @@ int main()
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
         glViewport(0, 0, w, h);
-        glClearColor(0.02f, 0.02f, 0.03f, 1.f);
+        glClearColor(0.015f, 0.03f, 0.055f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         const Vec3 eye{
