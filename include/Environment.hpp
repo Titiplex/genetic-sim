@@ -44,6 +44,7 @@ struct Environment
 
     std::vector<BiomassPulse> biomassPulses;
     std::vector<ToxicPulse> toxinPulses;
+    std::vector<BiomassPulse> nutrientPulses;
     float climateShock = 0.f;
 
     [[nodiscard]] float seasonal() const { return 0.5f + 0.5f * std::sin(time * 0.035f); }
@@ -115,8 +116,33 @@ struct Environment
         const float d2 = len2(p - c2);
         const float wetBoost = 0.7f + 0.6f * shorelineBlend(p);
         const float bloom = 0.5f + 0.5f * std::sin(time * 0.09f + 0.04f * p.x);
+        float pulseField = 0.f;
+        for (const auto& pulse : nutrientPulses)
+        {
+            if (pulse.amount <= 0.f) continue;
+            const float s2 = pulse.sigma * pulse.sigma;
+            pulseField += pulse.amount * std::exp(-len2(p - pulse.pos) / (2.f * s2));
+        }
         const float n = wetBoost * bloom * (1.8f * std::exp(-d1 / (2.f * 18.f * 18.f)) + 1.4f * std::exp(-d2 / (2.f * 14.f * 14.f)));
-        return clampf(n * (1.f - 0.35f * climateShock), 0.f, 3.0f);
+        return clampf((n + 0.5f * pulseField) * (1.f - 0.35f * climateShock), 0.f, 3.0f);
+    }
+
+    [[nodiscard]] float oxygen(const Vec3& p) const
+    {
+        const float waterDepth = clampf((waterSurfaceHeight(p) - p.y) / 20.f, 0.f, 1.6f);
+        const float altitude = clampf((p.y + worldRadius) / (2.f * worldRadius), 0.f, 1.f);
+        const float vegetBoost = 0.12f * nutrient(p) + 0.08f * light(p);
+        const float dryAir = 0.15f * (1.f - humidity(p));
+        const float base = 0.95f + 0.35f * altitude + vegetBoost - 0.45f * waterDepth - dryAir;
+        return clampf(base - 0.25f * climateShock, 0.f, 1.8f);
+    }
+
+    [[nodiscard]] float salinity(const Vec3& p) const
+    {
+        const float nearWater = shorelineBlend(p);
+        const float evap = 0.35f + 0.65f * droughtCycle();
+        const float patch = 0.5f + 0.5f * std::sin(0.025f * p.x - 0.03f * p.z + time * 0.12f);
+        return clampf(0.25f + 0.75f * nearWater * evap + 0.35f * patch, 0.f, 1.8f);
     }
 
     [[nodiscard]] float light(const Vec3& p) const
@@ -204,6 +230,7 @@ struct Environment
     [[nodiscard]] Vec3 gradL(const Vec3& p) const { constexpr float e = 0.8f; return Vec3{light({p.x + e, p.y, p.z}) - light({p.x - e, p.y, p.z}), light({p.x, p.y + e, p.z}) - light({p.x, p.y - e, p.z}), light({p.x, p.y, p.z + e}) - light({p.x, p.y, p.z - e})} / (2.f * e); }
     [[nodiscard]] Vec3 gradX(const Vec3& p) const { constexpr float e = 0.8f; return Vec3{toxin({p.x + e, p.y, p.z}) - toxin({p.x - e, p.y, p.z}), toxin({p.x, p.y + e, p.z}) - toxin({p.x, p.y - e, p.z}), toxin({p.x, p.y, p.z + e}) - toxin({p.x, p.y, p.z - e})} / (2.f * e); }
     [[nodiscard]] Vec3 gradB(const Vec3& p) const { constexpr float e = 0.8f; return Vec3{biomass({p.x + e, p.y, p.z}) - biomass({p.x - e, p.y, p.z}), biomass({p.x, p.y + e, p.z}) - biomass({p.x, p.y - e, p.z}), biomass({p.x, p.y, p.z + e}) - biomass({p.x, p.y, p.z - e})} / (2.f * e); }
+    [[nodiscard]] Vec3 gradO2(const Vec3& p) const { constexpr float e = 0.8f; return Vec3{oxygen({p.x + e, p.y, p.z}) - oxygen({p.x - e, p.y, p.z}), oxygen({p.x, p.y + e, p.z}) - oxygen({p.x, p.y - e, p.z}), oxygen({p.x, p.y, p.z + e}) - oxygen({p.x, p.y, p.z - e})} / (2.f * e); }
 
     void step(const float dt)
     {
@@ -221,8 +248,14 @@ struct Environment
             p.age += dt;
             p.amount *= std::exp(-0.026f * dt);
         }
+        for (auto& p : nutrientPulses)
+        {
+            p.age += dt;
+            p.amount *= std::exp(-0.035f * dt);
+        }
         biomassPulses.erase(std::remove_if(biomassPulses.begin(), biomassPulses.end(), [](const BiomassPulse& p) { return p.age > p.ttl || p.amount < 0.001f; }), biomassPulses.end());
         toxinPulses.erase(std::remove_if(toxinPulses.begin(), toxinPulses.end(), [](const ToxicPulse& p) { return p.age > p.ttl || p.amount < 0.001f; }), toxinPulses.end());
+        nutrientPulses.erase(std::remove_if(nutrientPulses.begin(), nutrientPulses.end(), [](const BiomassPulse& p) { return p.age > p.ttl || p.amount < 0.001f; }), nutrientPulses.end());
     }
 
     void depositBiomass(const Vec3& pos, float amount, float sigma = 5.f)
@@ -254,5 +287,11 @@ struct Environment
     {
         if (amount <= 0.f) return;
         toxinPulses.push_back({pos, amount, sigma, 0.f, 90.f + rndf(0.f, 40.f)});
+    }
+
+    void depositNutrient(const Vec3& pos, float amount, float sigma = 5.f)
+    {
+        if (amount <= 0.f) return;
+        nutrientPulses.push_back({pos, amount, sigma, 0.f, 55.f + rndf(0.f, 25.f)});
     }
 };

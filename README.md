@@ -152,3 +152,30 @@ biologiques plausibles (compétition, stratégies, morphologies) peuvent émerge
 - différenciation cellulaire via un GRN/CTRNN local,
 - symbiose (engulf → hôte/symbionte),
 - instanced rendering + optimisation SoA pour très grandes populations.
+
+## Proposition (10 changements) + implémentation
+
+> Les 10 changements ci-dessous sont **proposés et implémentés dans cette itération** pour rapprocher la simulation d'une dynamique plus plausible biologiquement, moins déterministe, et plus stable à long terme.
+
+### Changements très importants (impact majeur)
+
+1. **Ajout d'un champ d'oxygène environnemental (O2) + gradient** : l'oxygène varie selon altitude, immersion, humidité, biomasse et climat.
+2. **Ajout d'un champ de salinité + coût osmotique** : introduit un stress physiologique réaliste et des compromis écologiques.
+3. **Plasticité phénotypique asynchrone** : le phénotype n'est plus recalculé à chaque tick, mais selon une cadence adaptative (stress/apprentissage), ce qui améliore réalisme + performance.
+4. **Régulation démographique par capacité de charge dynamique** : la population cible dépend désormais du climat/saisons au lieu d'être fixe.
+
+### Autres changements importants
+
+5. **Saisonnalité de la reproduction** : une fenêtre reproductive fluctuante évite une reproduction uniforme non réaliste.
+6. **Réduction de l'endogamie** : pénalité de choix du partenaire si compatibilité génétique trop élevée.
+7. **Investissement parental héritable** : réserve énergétique parentale transférée au nouveau-né + coût de cooldown modulé.
+8. **Dispersion adaptative** : pression de dispersion augmentée par densité locale et trait génétique dédié.
+9. **Recyclage biogéochimique** : dépôt local de nutriments (via excrétion/activité) qui rétroagit sur les niches.
+10. **Métriques enrichies** : stress oxygène, stress salinité, taux reproductif, complexité génomique moyenne exportés dans les métriques.
+
+### Résultat attendu
+
+- Plus de **contraintes multi-factorielles** (énergie + maladie + oxygène + osmorégulation + climat).
+- Des **niches écologiques** plus nettes (zones humides, zones salines, hauteurs oxygénées, etc.).
+- Une dynamique évolutive moins “plate” grâce à la saisonnalité, la capacité de charge dynamique et l'investissement parental.
+- Un coût CPU mieux maîtrisé quand la population grandit (plasticité phénotypique asynchrone).

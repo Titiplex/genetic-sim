@@ -45,6 +45,10 @@ struct Organism
     float hydrationStressMemory = 0.f;
     float matePreference = 0.f;
     float socialDrive = 0.f;
+    float phenotypeUpdateTimer = 0.f;
+    float offspringInvestmentReserve = 0.f;
+    float oxygenStressMemory = 0.f;
+    float salinityStressMemory = 0.f;
     uint64_t geneticSignature = 0;
     int   deme = 0;
     LifeStage stage = LifeStage::Juvenile;
