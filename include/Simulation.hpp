@@ -409,6 +409,7 @@ struct Sim
         integrateInternalBody(o);
 
         Vec3 com = organismCenterOfMass(o);
+        const float bodyScale = clampf(static_cast<float>(o.cells.size()) / 18.f, 0.35f, 3.0f);
 
         const float N = env.nutrient(com);
         const float L = env.light(com);
@@ -429,15 +430,37 @@ struct Sim
         if (len2(steer) < 1e-6f) steer = Vec3{rndf(-1, 1), rndf(-1, 1), rndf(-1, 1)};
         steer = normalize(steer);
 
-        o.vel += steer * (0.6f * dt);
-        o.vel = clampVec(o.vel, 4.0f / (1.0f + 0.02f * static_cast<float>(o.cells.size())));
+        const Vec3 flow      = env.fluidVelocity(com);
+        const Vec3 gust      = env.turbulence(com, o.id + static_cast<uint64_t>(o.age * 100.f));
+        const float buoyancy = env.buoyancy(com, bodyScale);
+
+        o.vel += steer * (0.62f * dt);
+        o.vel += flow * (0.42f * dt);
+        o.vel += gust * dt;
+        o.vel.y += buoyancy * dt * 1.2f;
+
+        const Vec3 relFluid = o.vel - flow;
+        const float drag    = 0.12f + 0.05f * bodyScale;
+        o.vel -= relFluid * drag * dt;
+
+        o.vel = clampVec(o.vel, 4.8f / (1.0f + 0.024f * static_cast<float>(o.cells.size())));
         o.pos += o.vel * dt * 6.0f;
+
+        const float floorY = env.groundHeight(o.pos) + o.pheno.cellRadius * 0.9f;
+        if (o.pos.y < floorY)
+        {
+            o.pos.y = floorY;
+            if (o.vel.y < 0.f) o.vel.y *= -0.18f;
+            o.vel.x *= 0.92f;
+            o.vel.z *= 0.92f;
+        }
 
         if (const float r = len(o.pos); r > worldRadius)
         {
             const Vec3 inward = normalize(o.pos) * -1.f;
             o.vel += inward * dt * 4.f;
             o.pos = normalize(o.pos) * worldRadius;
+            o.vel *= 0.8f;
         }
 
         // Energy model with 3 factors + biomass digestion
@@ -448,10 +471,11 @@ struct Sim
                                                                                                                       .size()));
 
         const float moveCost = 0.015f * len(o.vel) * (1.0f + 0.03f * static_cast<float>(o.cells.size()));
+        const float turbulenceCost = 0.006f * len(gust) * (1.0f + 0.02f * static_cast<float>(o.cells.size()));
         const float maint    = o.pheno.baseMetabolism * (1.0f + 0.055f * static_cast<float>(o.cells.size()));
         const float ageDrain = 0.0008f * o.age;
 
-        o.energy += (uptake + photo - toxHit - moveCost - maint - ageDrain) * dt * 20.f;
+        o.energy += (uptake + photo - toxHit - moveCost - turbulenceCost - maint - ageDrain) * dt * 20.f;
 
         digestBiomass(o);
 
