@@ -50,6 +50,11 @@ struct Phenotype
     float diseaseResistance = 0.4f;
     float learningRate      = 0.2f;
     float reproductiveFlex  = 0.5f;
+    float thermalTolerance  = 0.5f;
+    float hydricTolerance   = 0.5f;
+    float socialAffinity    = 0.5f;
+    float microbiomeEfficiency = 0.5f;
+    float circadianPeriod   = 1.0f;
 
     std::array<float, 16> w{};
     std::array<Vec3, 8>   basis{};
@@ -143,6 +148,11 @@ static Phenotype interpretGenome(const Genome& g, const float temperature = 0.5f
     p.diseaseResistance = clampf(0.7f * p.immunity + 0.4f * p.toxinResistance, 0.1f, 1.8f);
     p.learningRate = clampf(0.2f + 0.35f * (1.f - stress) + 0.2f * resources, 0.05f, 0.95f);
     p.reproductiveFlex = clampf(0.4f + 0.3f * resources + 0.2f * temperature - 0.15f * stress, 0.05f, 1.0f);
+    p.thermalTolerance = clampf(0.55f + 0.45f * p.grnNodes[2] - 0.15f * p.grnNodes[8], 0.05f, 1.4f);
+    p.hydricTolerance = clampf(0.55f + 0.4f * p.grnNodes[6] + 0.2f * p.grnNodes[12], 0.05f, 1.5f);
+    p.socialAffinity = clampf(0.45f + 0.6f * p.grnNodes[4] - 0.3f * p.grnNodes[3], 0.f, 1.8f);
+    p.microbiomeEfficiency = clampf(0.55f + 0.45f * p.grnNodes[15] + 0.2f * p.grnNodes[1], 0.05f, 1.8f);
+    p.circadianPeriod = clampf(0.7f + 0.45f * (p.grnNodes[10] + 1.f), 0.45f, 1.7f);
 
     for (int i = 0; i < 16; ++i) p.w[i] = hashToRange(H(100 + i), -2.0f, 2.0f) + p.grnNodes[i] * 0.25f;
     for (int i = 0; i < 8; ++i)
@@ -165,6 +175,21 @@ static Phenotype interpretGenome(const Genome& g, const float temperature = 0.5f
         clampf(0.15f + 0.85f * (p.photoAffinity / 2.1f), 0.f, 1.f)
     };
     return p;
+}
+
+static uint64_t genomeSignature(const Genome& g)
+{
+    uint64_t s = 0x9E3779B97F4A7C15ULL;
+    for (const auto& m : g.modules)
+    {
+        s ^= mix64(fnv1a64(m.name) + 0xA24BAED4963EE407ULL);
+        for (const auto& gene : m.genes)
+        {
+            s ^= mix64(fnv1a64(gene.allele) ^ static_cast<uint64_t>(gene.dominance * 1000.f));
+            s = mix64(s);
+        }
+    }
+    return s;
 }
 
 static std::string mutateAllele(const std::string& s, const float rate)

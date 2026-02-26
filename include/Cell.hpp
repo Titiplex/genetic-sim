@@ -39,6 +39,13 @@ struct Organism
     float immuneMemory = 0.f;
     float neuralMemory = 0.f;
     float lastReward = 0.f;
+    float reproductionCooldown = 0.f;
+    float microbiomeHealth = 0.6f;
+    float heatStressMemory = 0.f;
+    float hydrationStressMemory = 0.f;
+    float matePreference = 0.f;
+    float socialDrive = 0.f;
+    uint64_t geneticSignature = 0;
     int   deme = 0;
     LifeStage stage = LifeStage::Juvenile;
     bool  alive  = true;

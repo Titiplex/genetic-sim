@@ -23,6 +23,16 @@ struct BiomassPulse
     float ttl    = 80.f;
 };
 
+
+struct ToxicPulse
+{
+    Vec3  pos;
+    float amount = 0.f;
+    float sigma  = 7.f;
+    float age    = 0.f;
+    float ttl    = 110.f;
+};
+
 struct Environment
 {
     float worldRadius = 80.f;
@@ -33,6 +43,8 @@ struct Environment
     Scenario scenario = Scenario::Baseline;
 
     std::vector<BiomassPulse> biomassPulses;
+    std::vector<ToxicPulse> toxinPulses;
+    float climateShock = 0.f;
 
     [[nodiscard]] float seasonal() const { return 0.5f + 0.5f * std::sin(time * 0.035f); }
     [[nodiscard]] float droughtCycle() const { return 0.5f + 0.5f * std::sin(time * 0.022f + 1.4f); }
@@ -73,8 +85,15 @@ struct Environment
         const float shell = std::exp(-((r - 58.f) * (r - 58.f)) / (2.f * 5.f * 5.f));
         const Vec3 hot{30.f * std::sin(time * 0.08f), 0.f, -30.f * std::cos(time * 0.06f)};
         const float hotspot = 1.6f * std::exp(-len2(p - hot) / (2.f * 10.f * 10.f));
+        float pulseField = 0.f;
+        for (const auto& pulse : toxinPulses)
+        {
+            if (pulse.amount <= 0.f) continue;
+            const float s2 = pulse.sigma * pulse.sigma;
+            pulseField += pulse.amount * std::exp(-len2(p - pulse.pos) / (2.f * s2));
+        }
         const float dryBoost = 1.25f - 0.45f * shorelineBlend(p);
-        return clampf((0.8f * shell + hotspot + 0.35f * (1.f - humidity(p))) * dryBoost, 0.f, 2.4f);
+        return clampf((0.8f * shell + hotspot + 0.35f * (1.f - humidity(p)) + 0.45f * climateShock + pulseField) * dryBoost, 0.f, 3.2f);
     }
 
     [[nodiscard]] float waterSurfaceHeight(const Vec3& p) const
@@ -97,7 +116,7 @@ struct Environment
         const float wetBoost = 0.7f + 0.6f * shorelineBlend(p);
         const float bloom = 0.5f + 0.5f * std::sin(time * 0.09f + 0.04f * p.x);
         const float n = wetBoost * bloom * (1.8f * std::exp(-d1 / (2.f * 18.f * 18.f)) + 1.4f * std::exp(-d2 / (2.f * 14.f * 14.f)));
-        return clampf(n, 0.f, 3.0f);
+        return clampf(n * (1.f - 0.35f * climateShock), 0.f, 3.0f);
     }
 
     [[nodiscard]] float light(const Vec3& p) const
@@ -106,7 +125,7 @@ struct Environment
         const float day = 0.65f + 0.35f * std::sin(time * 0.3f);
         const float underwater = clampf((waterSurfaceHeight(p) - p.y) / 18.f, 0.f, 1.f);
         const float attenuation = 1.f - 0.55f * underwater;
-        return clampf((0.1f + 1.2f * y) * day * attenuation, 0.f, 1.8f);
+        return clampf((0.1f + 1.2f * y) * day * attenuation * (1.f - 0.25f * climateShock), 0.f, 1.8f);
     }
 
     [[nodiscard]] float biomass(const Vec3& p) const
@@ -190,12 +209,20 @@ struct Environment
     {
         time += dt;
         fluidLevel = 4.8f + 2.8f * std::sin(time * 0.04f);
+        climateShock = clampf(climateShock * std::exp(-0.06f * dt) + std::max(0.f, std::sin(time * 0.011f + 1.2f)) * 0.0012f, 0.f, 1.4f);
+        if (rndf() < dt * 0.0025f) climateShock = clampf(climateShock + rndf(0.2f, 0.7f), 0.f, 1.4f);
         for (auto& p : biomassPulses)
         {
             p.age += dt;
             p.amount *= std::exp(-0.018f * dt);
         }
+        for (auto& p : toxinPulses)
+        {
+            p.age += dt;
+            p.amount *= std::exp(-0.026f * dt);
+        }
         biomassPulses.erase(std::remove_if(biomassPulses.begin(), biomassPulses.end(), [](const BiomassPulse& p) { return p.age > p.ttl || p.amount < 0.001f; }), biomassPulses.end());
+        toxinPulses.erase(std::remove_if(toxinPulses.begin(), toxinPulses.end(), [](const ToxicPulse& p) { return p.age > p.ttl || p.amount < 0.001f; }), toxinPulses.end());
     }
 
     void depositBiomass(const Vec3& pos, float amount, float sigma = 5.f)
@@ -217,5 +244,11 @@ struct Environment
             pulse.amount -= take;
             requested -= take;
         }
+    }
+
+    void depositToxin(const Vec3& pos, float amount, float sigma = 6.f)
+    {
+        if (amount <= 0.f) return;
+        toxinPulses.push_back({pos, amount, sigma, 0.f, 90.f + rndf(0.f, 40.f)});
     }
 };
