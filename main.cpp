@@ -259,6 +259,8 @@ int main()
     bool  cinematicCam = settings.cinematicCam;
     bool  showTrails   = settings.showTrails;
     AppScreen appScreen = AppScreen::MainMenu;
+    AppScreen optionsReturnScreen = AppScreen::MainMenu;
+    bool pausedBeforeOptions = paused;
     float camYaw       = 0.8f, camPitch = 0.5f, camDist = 180.f;
     float fogDensity   = 0.65f;
 
@@ -295,11 +297,15 @@ int main()
         {
             if (appScreen == AppScreen::MainMenu || appScreen == AppScreen::Simulation)
             {
+                optionsReturnScreen = appScreen;
+                pausedBeforeOptions = paused;
                 appScreen = AppScreen::Options;
+                paused = true;
             }
             else if (appScreen == AppScreen::Options)
             {
-                appScreen = AppScreen::Simulation;
+                appScreen = optionsReturnScreen;
+                if (appScreen == AppScreen::Simulation) paused = pausedBeforeOptions;
             }
         }
         oPrev = oNow;
@@ -333,6 +339,37 @@ int main()
                 showEnv = settings.showEnv;
             }
             gPrev = gNow;
+
+            const bool cNowOpt = (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS);
+            if (cNowOpt && !cPrev)
+            {
+                settings.showCurrents = !settings.showCurrents;
+                showCurrents = settings.showCurrents;
+            }
+            cPrev = cNowOpt;
+
+            const bool fNowOpt = (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS);
+            if (fNowOpt && !fPrev)
+            {
+                settings.cinematicCam = !settings.cinematicCam;
+                cinematicCam = settings.cinematicCam;
+            }
+            fPrev = fNowOpt;
+
+            const bool tNowOpt = (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS);
+            if (tNowOpt && !tPrev)
+            {
+                settings.showTrails = !settings.showTrails;
+                showTrails = settings.showTrails;
+            }
+            tPrev = tNowOpt;
+
+            const bool pNowOpt = (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS);
+            if (pNowOpt && !pPrev)
+            {
+                settings.startPaused = !settings.startPaused;
+            }
+            pPrev = pNowOpt;
 
             const bool oneNow = (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS);
             if (oneNow && !onePrev) settings.startTimeScale = std::max(0.2f, settings.startTimeScale - 0.2f);
@@ -569,6 +606,37 @@ int main()
                 pts.push_back({p.x, p.y, p.z, col.x, col.y, col.z, 1.6f});
             }
 
+            if (showCurrents)
+            {
+                for (int ix = -10; ix <= 10; ix += 2)
+                {
+                    for (int iy = -3; iy <= 4; iy += 2)
+                    {
+                        for (int iz = -10; iz <= 10; iz += 2)
+                        {
+                            Vec3 p{static_cast<float>(ix) * 6.f, static_cast<float>(iy) * 6.f, static_cast<float>(iz) * 6.f};
+                            if (len(p) > sim.worldRadius * 0.92f) continue;
+
+                            const Vec3 velocity = sim.env.fluidVelocity(p);
+                            const float speed = len(velocity);
+                            if (speed < 0.03f) continue;
+
+                            const Vec3 dir = velocity / speed;
+                            const float arrowLen = clampf(1.5f + speed * 2.2f, 1.3f, 5.2f);
+                            const Vec3 tip = p + dir * arrowLen;
+
+                            const Vec3 col{
+                                clampf(0.12f + 0.22f * speed, 0.f, 1.f),
+                                clampf(0.55f + 0.20f * speed, 0.f, 1.f),
+                                clampf(0.78f + 0.14f * speed, 0.f, 1.f)
+                            };
+
+                            lines.push_back({p.x, p.y, p.z, tip.x, tip.y, tip.z, col.x, col.y, col.z});
+                        }
+                    }
+                }
+            }
+
             // deterministic volumetric particles to make the ecosystem feel dense
             for (int ix = -8; ix <= 8; ++ix)
                 for (int iy = -4; iy <= 5; ++iy)
@@ -709,8 +777,12 @@ int main()
         else if (appScreen == AppScreen::Options)
         {
             std::ostringstream title;
-            title << "EvoLife3D | OPTIONS  [I/K] population +/-  [1/2] vitesse +/-  [G] env "
-                  << (settings.showEnv ? "on" : "off")
+            title << "EvoLife3D | OPTIONS  [I/K] population +/-  [1/2] vitesse +/-  [P] demarrer pause "
+                  << (settings.startPaused ? "on" : "off")
+                  << "  [G] env " << (settings.showEnv ? "on" : "off")
+                  << "  [C] courants " << (settings.showCurrents ? "on" : "off")
+                  << "  [F] camera " << (settings.cinematicCam ? "cinema" : "libre")
+                  << "  [T] traces " << (settings.showTrails ? "on" : "off")
                   << "  [O] retour"
                   << " | Pop=" << settings.initialPopulation
                   << " | x" << std::fixed << std::setprecision(1) << settings.startTimeScale;
