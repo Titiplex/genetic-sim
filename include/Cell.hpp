@@ -54,6 +54,8 @@ struct Organism
     float dormancy = 0.f;
     float acidStressMemory = 0.f;
     float nicheFidelity = 0.f;
+    float starvationTimer = 0.f;
+    float epigeneticStress = 0.f;
     uint64_t geneticSignature = 0;
     int   deme = 0;
     LifeStage stage = LifeStage::Juvenile;

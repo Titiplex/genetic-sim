@@ -797,6 +797,8 @@ int main()
             title << "EvoLife3D Cinematic | Pop " << sim.organisms.size()
                 << " | Fitness " << std::fixed << std::setprecision(2) << sim.metrics.meanFitness
                 << " | Het " << sim.metrics.heterozygosity
+                << " | Div " << std::setprecision(2) << sim.metrics.nicheDiversity
+                << " | Cells " << std::setprecision(1) << sim.metrics.meanCellCount
                 << " | x" << std::setprecision(1) << timeScale
                 << (cinematicCam ? " | CAM:follow" : " | CAM:free")
                 << (showTrails ? " | trails" : " | no-trails");
