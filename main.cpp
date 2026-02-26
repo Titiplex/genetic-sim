@@ -7,7 +7,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <deque>
+#include <iomanip>
 #include <random>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -124,34 +127,49 @@ int main()
 
         uniform mat4 uVP;
         out vec3 vColor;
+        out float vViewZ;
 
         void main(){
             gl_Position = uVP * vec4(aPos, 1.0);
             gl_PointSize = aSize;
             vColor = aColor;
+            vViewZ = gl_Position.z / max(0.0001, gl_Position.w);
         }
     )";
 
     auto FS_POINTS = R"(
         #version 330 core
         in vec3 vColor;
+        in float vViewZ;
         out vec4 FragColor;
+
+        uniform float uTime;
+        uniform float uFogDensity;
+        uniform float uGlow;
 
         void main(){
             vec2 p = gl_PointCoord * 2.0 - 1.0;
             float r2 = dot(p,p);
             if(r2 > 1.0) discard;
-            float edge = smoothstep(1.0, 0.5, r2);
-            FragColor = vec4(vColor * edge, 1.0);
+            float radial = 1.0 - clamp(r2, 0.0, 1.0);
+            float core = smoothstep(0.0, 1.0, radial);
+            float halo = smoothstep(0.0, 0.65, radial);
+            float pulse = 0.92 + 0.08 * sin(uTime * 1.7 + (vColor.r + vColor.g + vColor.b) * 5.0);
+            float fog = exp(-uFogDensity * (vViewZ * vViewZ + 0.25));
+            vec3 lit = vColor * (0.35 + 0.85 * core) + vec3(0.18, 0.22, 0.26) * halo * uGlow;
+            FragColor = vec4(lit * fog * pulse, clamp(0.4 + halo * 0.65, 0.0, 1.0));
         }
     )";
 
     auto FS_LINES = R"(
         #version 330 core
         in vec3 vColor;
+        in float vViewZ;
         out vec4 FragColor;
+        uniform float uFogDensity;
         void main(){
-            FragColor = vec4(vColor, 0.85);
+            float fog = exp(-uFogDensity * (vViewZ * vViewZ + 0.15));
+            FragColor = vec4(vColor * fog, 0.72);
         }
     )";
 
@@ -160,6 +178,10 @@ int main()
 
     const GLint uVPPoints = glGetUniformLocation(progPoints, "uVP");
     const GLint uVPLines  = glGetUniformLocation(progLines, "uVP");
+    const GLint uTimePoints = glGetUniformLocation(progPoints, "uTime");
+    const GLint uFogPoints = glGetUniformLocation(progPoints, "uFogDensity");
+    const GLint uFogLines = glGetUniformLocation(progLines, "uFogDensity");
+    const GLint uGlowPoints = glGetUniformLocation(progPoints, "uGlow");
 
     // Points VAO/VBO
     GLuint vaoPts = 0, vboPts = 0;
@@ -205,9 +227,15 @@ int main()
     bool  paused       = false;
     bool  showEnv      = true;
     bool  showCurrents = true;
+    bool  cinematicCam = true;
+    bool  showTrails   = true;
     float camYaw       = 0.8f, camPitch = 0.5f, camDist = 180.f;
+    float fogDensity   = 0.65f;
+    float timeScale    = 1.0f;
 
-    bool pPrev = false, vPrev = false, rPrev = false, nPrev = false, cPrev = false;
+    std::unordered_map<uint64_t, std::deque<Vec3>> trails;
+
+    bool pPrev = false, vPrev = false, rPrev = false, nPrev = false, cPrev = false, fPrev = false, tPrev = false;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -240,6 +268,19 @@ int main()
         const bool singleStep = (nNow && !nPrev && paused);
         nPrev                 = nNow;
 
+        const bool fNow = (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS);
+        if (fNow && !fPrev) cinematicCam = !cinematicCam;
+        fPrev = fNow;
+
+        const bool tNow = (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS);
+        if (tNow && !tPrev) showTrails = !showTrails;
+        tPrev = tNow;
+
+        if (glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS) timeScale = std::min(6.f, timeScale + 0.015f);
+        if (glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS) timeScale = std::max(0.1f, timeScale - 0.015f);
+        if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS) fogDensity = std::max(0.08f, fogDensity - 0.008f);
+        if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS) fogDensity = std::min(1.7f, fogDensity + 0.008f);
+
         // camera controls
         if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) camYaw -= 0.02f;
         if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) camYaw += 0.02f;
@@ -251,7 +292,7 @@ int main()
         const double now   = glfwGetTime();
         const double frame = now - lastTime;
         lastTime           = now;
-        accum += frame;
+        accum += frame * timeScale;
 
         if (!paused)
         {
@@ -331,6 +372,31 @@ int main()
             // COM marker
             const Vec3 com = Sim::organismCenterOfMass(o);
             pts.push_back({com.x, com.y, com.z, 1.f, 1.f, 1.f, 2.3f});
+
+            auto& trail = trails[o.id];
+            trail.push_back(com);
+            if (trail.size() > 22) trail.pop_front();
+            if (showTrails && trail.size() > 2)
+            {
+                for (size_t k = 1; k < trail.size(); ++k)
+                {
+                    const float t = static_cast<float>(k) / static_cast<float>(trail.size() - 1);
+                    const Vec3 tc = {
+                        clampf(baseColor.x * (0.2f + 0.6f * t), 0.f, 1.f),
+                        clampf(baseColor.y * (0.2f + 0.6f * t), 0.f, 1.f),
+                        clampf(baseColor.z * (0.2f + 0.8f * t), 0.f, 1.f)
+                    };
+                    const Vec3 a = trail[k - 1];
+                    const Vec3 b = trail[k];
+                    lines.push_back({a.x, a.y, a.z, b.x, b.y, b.z, tc.x, tc.y, tc.z});
+                }
+            }
+        }
+        for (auto it = trails.begin(); it != trails.end();)
+        {
+            const bool stillAlive = std::any_of(sim.organisms.begin(), sim.organisms.end(), [&](const Organism& o) { return o.id == it->first; });
+            if (!stillAlive) it = trails.erase(it);
+            else ++it;
         }
 
         // Environment layer: terrain + ocean + field probes
@@ -394,6 +460,38 @@ int main()
 
                 pts.push_back({p.x, p.y, p.z, col.x, col.y, col.z, 1.6f});
             }
+
+            // deterministic volumetric particles to make the ecosystem feel dense
+            for (int ix = -8; ix <= 8; ++ix)
+                for (int iy = -4; iy <= 5; ++iy)
+                    for (int iz = -8; iz <= 8; ++iz)
+                    {
+                        const Vec3 seed = Vec3{static_cast<float>(ix), static_cast<float>(iy), static_cast<float>(iz)};
+                        const Vec3 jitter = hashToVec3(static_cast<uint64_t>((ix + 19) * 73856093 ^ (iy + 23) * 19349663 ^ (iz + 31) * 83492791));
+                        Vec3 p = seed * 10.0f + jitter * 3.0f;
+                        p.y += std::sin(sim.env.time * 0.6f + seed.x * 0.37f + seed.z * 0.21f) * 2.5f;
+                        if (len(p) > sim.worldRadius * 1.05f) continue;
+                        const float n = sim.env.nutrient(p);
+                        const float x = sim.env.toxin(p);
+                        const float lum = clampf(0.04f + 0.13f * n + 0.1f * x, 0.f, 0.35f);
+                        pts.push_back({p.x, p.y, p.z, lum * 0.8f, lum, lum * 1.1f, 1.2f + 1.4f * lum});
+                    }
+        }
+
+        // celestial cues (sun/moon + stars) for time and atmosphere
+        const float dayPhase = 0.5f + 0.5f * std::sin(sim.env.time * 0.07f);
+        const float orbit = sim.env.time * 0.11f;
+        const Vec3 sunPos{std::cos(orbit) * sim.worldRadius * 0.95f, 25.f + std::sin(orbit) * sim.worldRadius * 0.42f, std::sin(orbit) * sim.worldRadius * 0.95f};
+        const Vec3 moonPos = sunPos * -0.95f + Vec3{0.f, 18.f, 0.f};
+        pts.push_back({sunPos.x, sunPos.y, sunPos.z, 1.f, 0.84f, 0.4f, 16.f + 6.f * dayPhase});
+        pts.push_back({moonPos.x, moonPos.y, moonPos.z, 0.55f, 0.68f, 1.f, 10.f + 5.f * (1.f - dayPhase)});
+        for (int i = 0; i < 140; ++i)
+        {
+            const Vec3 h = hashToVec3(static_cast<uint64_t>(7000 + i));
+            const Vec3 star = normalize(h) * (sim.worldRadius * 1.2f);
+            const float twinkle = 0.65f + 0.35f * std::sin(sim.env.time * 1.3f + i * 3.1f);
+            const float vis = (1.f - dayPhase) * twinkle;
+            pts.push_back({star.x, star.y, star.z, 0.45f * vis, 0.55f * vis, 0.75f * vis, 1.5f + 1.8f * vis});
         }
 
         lineVerts.clear();
@@ -417,7 +515,8 @@ int main()
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
         glViewport(0, 0, w, h);
-        glClearColor(0.015f, 0.03f, 0.055f, 1.f);
+        const float dayL = 0.18f + 0.82f * dayPhase;
+        glClearColor(0.01f + dayL * 0.06f, 0.02f + dayL * 0.1f, 0.05f + dayL * 0.12f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         const Vec3 eye{
@@ -429,12 +528,19 @@ int main()
         const Mat4 P = perspective(60.f * 3.1415926f / 180.f,
                                    static_cast<float>(w) / static_cast<float>(std::max(h, 1)),
                                    0.1f, 1000.f);
-        const Mat4 V  = lookAt(eye, Vec3{0, 0, 0}, Vec3{0, 1, 0});
+        Vec3 focus{0, 0, 0};
+        if (cinematicCam && !sim.organisms.empty())
+        {
+            const auto target = std::max_element(sim.organisms.begin(), sim.organisms.end(), [](const Organism& a, const Organism& b) { return a.energy < b.energy; });
+            focus = Sim::organismCenterOfMass(*target);
+        }
+        const Mat4 V  = lookAt(eye + focus, focus, Vec3{0, 1, 0});
         const Mat4 VP = mul(P, V);
 
         // Lines (springs)
         glUseProgram(progLines);
         glUniformMatrix4fv(uVPLines, 1, GL_FALSE, VP.m);
+        glUniform1f(uFogLines, fogDensity);
         glBindVertexArray(vaoLines);
         glLineWidth(1.0f);
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVerts.size()));
@@ -442,6 +548,9 @@ int main()
         // Points (cells + env probes)
         glUseProgram(progPoints);
         glUniformMatrix4fv(uVPPoints, 1, GL_FALSE, VP.m);
+        glUniform1f(uTimePoints, static_cast<float>(sim.env.time));
+        glUniform1f(uFogPoints, fogDensity);
+        glUniform1f(uGlowPoints, 0.8f + 0.4f * (1.f - dayPhase));
         glBindVertexArray(vaoPts);
         glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(pts.size()));
 
@@ -470,6 +579,15 @@ int main()
                 << (showEnv ? " [ENV ON]" : " [ENV OFF]")
                 << (showCurrents ? " [CUR ON]" : " [CUR OFF]")
                 << "\n";
+
+            std::ostringstream title;
+            title << "EvoLife3D Cinematic | Pop " << sim.organisms.size()
+                << " | Fitness " << std::fixed << std::setprecision(2) << sim.metrics.meanFitness
+                << " | Het " << sim.metrics.heterozygosity
+                << " | x" << std::setprecision(1) << timeScale
+                << (cinematicCam ? " | CAM:follow" : " | CAM:free")
+                << (showTrails ? " | trails" : " | no-trails");
+            glfwSetWindowTitle(window, title.str().c_str());
         }
     }
 
