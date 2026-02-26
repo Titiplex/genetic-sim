@@ -4,11 +4,6 @@
 #include <vector>
 #include <maths/Hash.hpp>
 
-// ======================= Environment (3 factors + biomass) ==========================
-// 1) Nutrients N(x,y,z)
-// 2) Light L(x,y,z)
-// 3) Toxin X(x,y,z)
-// + Biomass B from dead organisms (stored as pulses)
 struct BiomassPulse
 {
     Vec3  pos;
@@ -26,22 +21,38 @@ struct Environment
 
     std::vector<BiomassPulse> biomassPulses;
 
+    [[nodiscard]] float waterSurfaceHeight(const Vec3& p) const
+    {
+        return fluidLevel
+            + 1.8f * std::sin(0.045f * p.x + time * 0.85f)
+            + 1.2f * std::cos(0.04f * p.z - time * 0.65f);
+    }
+
+    [[nodiscard]] float shorelineBlend(const Vec3& p) const
+    {
+        const float shoreBand = 4.2f;
+        return clampf((waterSurfaceHeight(p) - groundHeight(p) + shoreBand) / (2.f * shoreBand), 0.f, 1.f);
+    }
+
     [[nodiscard]] float nutrient(const Vec3& p) const
     {
         const Vec3  c1{20.f * std::sin(time * 0.07f), 8.f * std::cos(time * 0.05f), 20.f * std::cos(time * 0.09f)};
         const Vec3  c2{-25.f * std::cos(time * 0.04f), -10.f * std::sin(time * 0.06f), 15.f * std::sin(time * 0.03f)};
         const float d1 = len2(p - c1);
         const float d2 = len2(p - c2);
-        const float n  = 1.8f * std::exp(-d1 / (2.f * 18.f * 18.f))
-            + 1.4f * std::exp(-d2 / (2.f * 14.f * 14.f));
-        return clampf(n, 0.f, 2.5f);
+        const float wetBoost = 0.7f + 0.6f * shorelineBlend(p);
+        const float n  = wetBoost * (1.8f * std::exp(-d1 / (2.f * 18.f * 18.f))
+            + 1.4f * std::exp(-d2 / (2.f * 14.f * 14.f)));
+        return clampf(n, 0.f, 2.8f);
     }
 
     [[nodiscard]] float light(const Vec3& p) const
     {
         const float y   = (p.y + worldRadius) / (2.f * worldRadius);
         const float day = 0.65f + 0.35f * std::sin(time * 0.3f);
-        return clampf((0.1f + 1.2f * y) * day, 0.f, 1.8f);
+        const float underwater = clampf((waterSurfaceHeight(p) - p.y) / 18.f, 0.f, 1.f);
+        const float attenuation = 1.f - 0.55f * underwater;
+        return clampf((0.1f + 1.2f * y) * day * attenuation, 0.f, 1.8f);
     }
 
     [[nodiscard]] float toxin(const Vec3& p) const
@@ -50,7 +61,8 @@ struct Environment
         const float shell = std::exp(-((r - 58.f) * (r - 58.f)) / (2.f * 5.f * 5.f));
         const Vec3  hot{30.f * std::sin(time * 0.08f), 0.f, -30.f * std::cos(time * 0.06f)};
         const float hotspot = 1.6f * std::exp(-len2(p - hot) / (2.f * 10.f * 10.f));
-        return clampf(0.8f * shell + hotspot, 0.f, 2.2f);
+        const float dryBoost = 1.25f - 0.45f * shorelineBlend(p);
+        return clampf((0.8f * shell + hotspot) * dryBoost, 0.f, 2.2f);
     }
 
     [[nodiscard]] float biomass(const Vec3& p) const
@@ -105,7 +117,7 @@ struct Environment
 
     [[nodiscard]] float buoyancy(const Vec3& p, const float bodyScale) const
     {
-        const float depth      = fluidLevel - p.y;
+        const float depth      = waterSurfaceHeight(p) - p.y;
         const float submersion = clampf(depth / 22.f, 0.f, 1.f);
         const float lift       = (0.20f + 0.55f * submersion) * (1.15f - 0.18f * bodyScale);
         const float gravity    = 0.15f + 0.05f * bodyScale;
@@ -155,10 +167,10 @@ struct Environment
     void step(const float dt)
     {
         time += dt;
+        fluidLevel = 4.8f + 2.8f * std::sin(time * 0.04f);
         for (auto& p : biomassPulses)
         {
             p.age += dt;
-            // decay amount over time
             p.amount *= std::exp(-0.018f * dt);
         }
 
@@ -182,7 +194,6 @@ struct Environment
     {
         if (requested <= 0.f || biomassPulses.empty()) return;
 
-        // remove from nearby pulses first
         for (auto& pulse : biomassPulses)
         {
             const float d2        = len2(pos - pulse.pos);

@@ -30,6 +30,7 @@ struct Organism
 
     Vec3  pos;
     Vec3  vel;
+    float gaitPhase = 0.f;
     float age    = 0.f;
     float energy = 8.f;
     bool  alive  = true;

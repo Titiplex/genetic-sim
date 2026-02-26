@@ -29,11 +29,20 @@ struct Phenotype
     float splitThreshold   = 18.f;
     float mutationRate     = 0.06f;
     float cellRadius       = 0.65f;
+    float bodyDensity      = 1.0f;
+    float motorDrive       = 0.6f;
+    float fineness         = 0.5f;
 
     // Dynamic growth interpreter
     std::array<float, 16> w{};
     std::array<Vec3, 8>   basis{};
     std::array<float, 8>  basisGain{};
+
+    // Dynamic motion interpreter (feature -> actuator)
+    std::array<float, 12> motorW{};
+    std::array<Vec3, 6>   actuatorAxis{};
+    std::array<float, 6>  actuatorBias{};
+    std::array<float, 6>  actuatorFreq{};
 
     Vec3 pigment{0.7f, 0.7f, 1.0f};
 };
@@ -65,12 +74,23 @@ static Phenotype interpretGenome(const Genome& g)
     p.splitThreshold   = hashToRange(H(10), 10.f, 40.f);
     p.mutationRate     = hashToRange(H(11), 0.01f, 0.18f);
     p.cellRadius       = hashToRange(H(12), 0.4f, 1.0f);
+    p.bodyDensity      = hashToRange(H(13), 0.6f, 1.8f);
+    p.motorDrive       = hashToRange(H(14), 0.08f, 1.45f);
+    p.fineness         = hashToRange(H(15), 0.1f, 1.0f);
 
     for (int i = 0; i < 16; ++i) p.w[i] = hashToRange(H(100 + i), -2.0f, 2.0f);
     for (int i = 0; i < 8; ++i)
     {
         p.basis[i]     = hashToVec3(H(200 + i));
         p.basisGain[i] = hashToRange(H(300 + i), -1.0f, 1.0f);
+    }
+
+    for (int i = 0; i < 12; ++i) p.motorW[i] = hashToRange(H(400 + i), -2.2f, 2.2f);
+    for (int i = 0; i < 6; ++i)
+    {
+        p.actuatorAxis[i] = hashToVec3(H(500 + i));
+        p.actuatorBias[i] = hashToRange(H(600 + i), -1.0f, 1.0f);
+        p.actuatorFreq[i] = hashToRange(H(700 + i), 0.15f, 2.4f);
     }
 
     p.pigment = {

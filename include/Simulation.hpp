@@ -398,6 +398,46 @@ struct Sim
         env.consumeBiomassNear(com, gain);
     }
 
+
+    Vec3 computeActuation(Organism& o, const Vec3& com, const Vec3& gN, const Vec3& gL, const Vec3& gX, const Vec3& gB) const
+    {
+        const float waterDepth = env.waterSurfaceHeight(com) - com.y;
+        const float submerged = clampf(waterDepth / 12.f, 0.f, 1.f);
+        const float onGround = clampf((env.groundHeight(com) + o.pheno.cellRadius - com.y) / 2.5f, 0.f, 1.f);
+
+        const std::array<float, 12> feat = {
+            clampf(len(o.vel) / 4.5f, 0.f, 1.f),
+            clampf(o.energy / std::max(2.f, o.pheno.splitThreshold), 0.f, 2.f),
+            clampf(o.age / std::max(20.f, o.pheno.maxAge), 0.f, 2.f),
+            clampf(len(gN) * 2.2f, 0.f, 1.f),
+            clampf(len(gL) * 2.2f, 0.f, 1.f),
+            clampf(len(gX) * 2.2f, 0.f, 1.f),
+            clampf(len(gB) * 2.2f, 0.f, 1.f),
+            submerged,
+            onGround,
+            clampf(static_cast<float>(o.cells.size()) / 28.f, 0.f, 2.f),
+            clampf(env.shorelineBlend(com), 0.f, 1.f),
+            1.f
+        };
+
+        float command = 0.f;
+        for (int i = 0; i < 12; ++i) command += feat[i] * o.pheno.motorW[i];
+        command = std::tanh(command);
+
+        o.gaitPhase += dt * (0.25f + 0.75f * o.pheno.fineness);
+
+        Vec3 thrust{0.f, 0.f, 0.f};
+        for (int i = 0; i < 6; ++i)
+        {
+            const Vec3 axis = normalize(o.pheno.actuatorAxis[i]);
+            const float osc = std::sin(o.gaitPhase * (0.8f + o.pheno.actuatorFreq[i]) + o.pheno.actuatorBias[i] * 3.14159f);
+            const float amp = (0.35f + 0.65f * submerged + 0.55f * onGround) * o.pheno.motorDrive;
+            thrust += axis * (command * osc * amp);
+        }
+
+        return thrust;
+    }
+
     // ---------- update organism ----------
     void updateOne(Organism& o, std::vector<Organism>& newborns)
     {
@@ -433,17 +473,23 @@ struct Sim
         const Vec3 flow      = env.fluidVelocity(com);
         const Vec3 gust      = env.turbulence(com, o.id + static_cast<uint64_t>(o.age * 100.f));
         const float buoyancy = env.buoyancy(com, bodyScale);
+        const Vec3 actuation = computeActuation(o, com, gN, gL, gX, gB);
 
-        o.vel += steer * (0.62f * dt);
-        o.vel += flow * (0.42f * dt);
+        o.vel += steer * (0.48f * dt);
+        o.vel += flow * (0.38f * dt);
         o.vel += gust * dt;
-        o.vel.y += buoyancy * dt * 1.2f;
+        o.vel += actuation * (0.95f * dt);
+        o.vel.y += buoyancy * dt * (1.0f + 0.2f * (1.3f - o.pheno.bodyDensity));
 
         const Vec3 relFluid = o.vel - flow;
-        const float drag    = 0.12f + 0.05f * bodyScale;
+        const float drag    = 0.10f + 0.06f * bodyScale + 0.03f * o.pheno.bodyDensity;
         o.vel -= relFluid * drag * dt;
 
-        o.vel = clampVec(o.vel, 4.8f / (1.0f + 0.024f * static_cast<float>(o.cells.size())));
+        const float terrainDrag = clampf((env.groundHeight(o.pos) + 1.0f - o.pos.y) / 2.0f, 0.f, 1.f);
+        o.vel.x *= (1.f - 0.08f * terrainDrag * dt * 20.f);
+        o.vel.z *= (1.f - 0.08f * terrainDrag * dt * 20.f);
+
+        o.vel = clampVec(o.vel, 5.6f / (1.0f + 0.024f * static_cast<float>(o.cells.size())));
         o.pos += o.vel * dt * 6.0f;
 
         const float floorY = env.groundHeight(o.pos) + o.pheno.cellRadius * 0.9f;
@@ -471,11 +517,12 @@ struct Sim
                                                                                                                       .size()));
 
         const float moveCost = 0.015f * len(o.vel) * (1.0f + 0.03f * static_cast<float>(o.cells.size()));
+        const float actuationCost = 0.010f * len(actuation) * (0.6f + 0.8f * o.pheno.motorDrive);
         const float turbulenceCost = 0.006f * len(gust) * (1.0f + 0.02f * static_cast<float>(o.cells.size()));
         const float maint    = o.pheno.baseMetabolism * (1.0f + 0.055f * static_cast<float>(o.cells.size()));
         const float ageDrain = 0.0008f * o.age;
 
-        o.energy += (uptake + photo - toxHit - moveCost - turbulenceCost - maint - ageDrain) * dt * 20.f;
+        o.energy += (uptake + photo - toxHit - moveCost - actuationCost - turbulenceCost - maint - ageDrain) * dt * 20.f;
 
         digestBiomass(o);
 
