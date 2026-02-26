@@ -15,3 +15,13 @@ else ()
     find_package(OpenGL REQUIRED)
     target_link_libraries(evo PRIVATE glfw OpenGL::GL glm::glm)
 endif ()
+
+
+option(EVO_ENABLE_OPENMP "Enable OpenMP acceleration" ON)
+if (EVO_ENABLE_OPENMP)
+    find_package(OpenMP)
+    if (OpenMP_CXX_FOUND)
+        target_link_libraries(evo PRIVATE OpenMP::OpenMP_CXX)
+        target_compile_definitions(evo PRIVATE EVO_HAS_OPENMP=1)
+    endif ()
+endif ()

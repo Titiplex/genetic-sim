@@ -215,6 +215,22 @@ struct Environment
         return clampf(0.25f + 0.75f * nearWater * evap + 0.35f * patch, 0.f, 1.8f);
     }
 
+    [[nodiscard]] float dissolvedCO2(const Vec3& p) const
+    {
+        const float depth = clampf((waterSurfaceHeight(p) - p.y) / 20.f, 0.f, 1.5f);
+        const float patch = 0.5f + 0.5f * std::sin(0.018f * p.x + 0.02f * p.z - time * 0.09f);
+        return clampf(0.22f + 0.55f * depth + 0.35f * patch + 0.35f * climateShock, 0.f, 2.2f);
+    }
+
+    [[nodiscard]] float hydrothermalVent(const Vec3& p) const
+    {
+        const Vec3 ventA{32.f * std::sin(time * 0.03f), -22.f, 28.f * std::cos(time * 0.025f)};
+        const Vec3 ventB{-36.f * std::cos(time * 0.02f), -25.f, -20.f * std::sin(time * 0.03f)};
+        const float vA = std::exp(-len2(p - ventA) / (2.f * 10.f * 10.f));
+        const float vB = std::exp(-len2(p - ventB) / (2.f * 8.f * 8.f));
+        return clampf(vA + 0.9f * vB, 0.f, 1.5f);
+    }
+
     [[nodiscard]] float light(const Vec3& p) const
     {
         const float y = (p.y + worldRadius) / (2.f * worldRadius);
