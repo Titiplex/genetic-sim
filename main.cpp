@@ -202,11 +202,12 @@ int main()
     double       accum    = 0.0;
     const double fixedDt  = sim.dt;
 
-    bool  paused  = false;
-    bool  showEnv = true;
-    float camYaw  = 0.8f, camPitch = 0.5f, camDist = 180.f;
+    bool  paused       = false;
+    bool  showEnv      = true;
+    bool  showCurrents = true;
+    float camYaw       = 0.8f, camPitch = 0.5f, camDist = 180.f;
 
-    bool pPrev = false, vPrev = false, rPrev = false, nPrev = false;
+    bool pPrev = false, vPrev = false, rPrev = false, nPrev = false, cPrev = false;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -222,6 +223,10 @@ int main()
         const bool vNow = (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS);
         if (vNow && !vPrev) showEnv = !showEnv;
         vPrev = vNow;
+
+        const bool cNow = (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS);
+        if (cNow && !cPrev) showCurrents = !showCurrents;
+        cPrev = cNow;
 
         const bool rNow = (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS);
         if (rNow && !rPrev)
@@ -463,6 +468,7 @@ int main()
                 << " | Time: " << sim.env.time
                 << (paused ? " [PAUSED]" : "")
                 << (showEnv ? " [ENV ON]" : " [ENV OFF]")
+                << (showCurrents ? " [CUR ON]" : " [CUR OFF]")
                 << "\n";
         }
     }
