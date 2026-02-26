@@ -55,6 +55,10 @@ struct Phenotype
     float socialAffinity    = 0.5f;
     float microbiomeEfficiency = 0.5f;
     float circadianPeriod   = 1.0f;
+    float oxygenTolerance   = 0.5f;
+    float osmoregulation    = 0.5f;
+    float parentalInvestment = 0.5f;
+    float dispersalDrive    = 0.5f;
 
     std::array<float, 16> w{};
     std::array<Vec3, 8>   basis{};
@@ -153,6 +157,10 @@ static Phenotype interpretGenome(const Genome& g, const float temperature = 0.5f
     p.socialAffinity = clampf(0.45f + 0.6f * p.grnNodes[4] - 0.3f * p.grnNodes[3], 0.f, 1.8f);
     p.microbiomeEfficiency = clampf(0.55f + 0.45f * p.grnNodes[15] + 0.2f * p.grnNodes[1], 0.05f, 1.8f);
     p.circadianPeriod = clampf(0.7f + 0.45f * (p.grnNodes[10] + 1.f), 0.45f, 1.7f);
+    p.oxygenTolerance = clampf(0.75f + 0.5f * p.grnNodes[2] + 0.18f * p.grnNodes[1], 0.05f, 1.8f);
+    p.osmoregulation = clampf(0.7f + 0.45f * p.grnNodes[14] + 0.2f * p.grnNodes[6], 0.05f, 1.8f);
+    p.parentalInvestment = clampf(0.65f + 0.5f * p.grnNodes[9] - 0.15f * p.grnNodes[3], 0.05f, 1.8f);
+    p.dispersalDrive = clampf(0.7f + 0.5f * p.grnNodes[13] + 0.1f * p.grnNodes[10], 0.05f, 1.8f);
 
     for (int i = 0; i < 16; ++i) p.w[i] = hashToRange(H(100 + i), -2.0f, 2.0f) + p.grnNodes[i] * 0.25f;
     for (int i = 0; i < 8; ++i)
