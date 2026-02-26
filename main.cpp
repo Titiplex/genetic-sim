@@ -333,124 +333,46 @@ int main()
             pts.push_back({com.x, com.y, com.z, 1.f, 1.f, 1.f, 2.3f});
         }
 
-        // Environment layer: terrain + ocean + currents + field probes
+        // Environment layer: terrain + ocean + field probes
         if (showEnv)
         {
-            constexpr int gridN = 26;
-            constexpr float gridStep = 3.0f;
-
-            for (int ix = -gridN; ix <= gridN; ++ix)
+            for (int ix = -24; ix <= 24; ++ix)
             {
-                for (int iz = -gridN; iz <= gridN; ++iz)
+                for (int iz = -24; iz <= 24; ++iz)
                 {
-                    const float x = static_cast<float>(ix) * gridStep;
-                    const float z = static_cast<float>(iz) * gridStep;
-                    const Vec3 sample{x, 0.f, z};
+                    const float x = static_cast<float>(ix) * 3.2f;
+                    const float z = static_cast<float>(iz) * 3.2f;
+                    const Vec3 query{x, 0.f, z};
+                    const float groundY = sim.env.groundHeight(query);
+                    const float waterY = sim.env.waterSurfaceHeight(query);
+                    const float shore = sim.env.shorelineBlend(Vec3{x, waterY, z});
 
-                    const float groundY = sim.env.groundHeight(sample);
-                    const float waterY  = sim.env.waterSurfaceHeight(sample);
-                    const float shore   = sim.env.shorelineBlend(Vec3{x, waterY, z});
-                    const float wetness = clampf((waterY - groundY) / 8.0f, 0.f, 1.f);
+                    const float slope = std::abs(sim.env.groundHeight(Vec3{x + 0.6f, 0.f, z})
+                        - sim.env.groundHeight(Vec3{x - 0.6f, 0.f, z}))
+                        + std::abs(sim.env.groundHeight(Vec3{x, 0.f, z + 0.6f})
+                            - sim.env.groundHeight(Vec3{x, 0.f, z - 0.6f}));
 
-                    const float sx = sim.env.groundHeight(Vec3{x + 0.8f, 0.f, z}) - sim.env.groundHeight(
-                        Vec3{x - 0.8f, 0.f, z});
-                    const float sz = sim.env.groundHeight(Vec3{x, 0.f, z + 0.8f}) - sim.env.groundHeight(
-                        Vec3{x, 0.f, z - 0.8f});
-                    const float slope = clampf(0.35f * std::sqrt(sx * sx + sz * sz), 0.f, 1.f);
-
-                    // Terrain points
                     const Vec3 landColor{
-                        clampf(0.20f + 0.35f * slope + 0.10f * (1.f - wetness), 0.f, 1.f),
-                        clampf(0.30f + 0.45f * (1.f - slope) + 0.15f * (1.f - wetness), 0.f, 1.f),
-                        clampf(0.16f + 0.18f * (1.f - wetness), 0.f, 1.f)
+                        clampf(0.14f + 0.22f * slope, 0.f, 1.f),
+                        clampf(0.24f + 0.44f * (1.f - slope * 0.2f) + 0.18f * (1.f - shore), 0.f, 1.f),
+                        clampf(0.10f + 0.14f * (1.f - shore), 0.f, 1.f)
                     };
-                    pts.push_back({x, groundY, z, landColor.x, landColor.y, landColor.z, 1.85f});
+                    pts.push_back({x, groundY, z, landColor.x, landColor.y, landColor.z, 2.0f});
 
-                    // Simple terrain contour hints
-                    if ((ix % 4 == 0 || iz % 4 == 0) && std::abs(waterY - groundY) < 7.0f)
+                    if (waterY > groundY - 1.2f)
                     {
-                        const float contourY = groundY + 0.08f;
-                        const Vec3 contourCol{
-                            clampf(0.16f + 0.25f * slope, 0.f, 1.f),
-                            clampf(0.20f + 0.20f * (1.f - slope), 0.f, 1.f),
-                            0.11f
-                        };
-                        lines.push_back({x - 0.7f, contourY, z, x + 0.7f, contourY, z, contourCol.x, contourCol.y,
-                                         contourCol.z});
-                    }
-
-                    // Water surface decoration
-                    if (waterY > groundY - 1.3f)
-                    {
-                        const float wave = 0.5f + 0.5f * std::sin(0.12f * x + 0.09f * z + sim.env.time * 1.2f);
-                        const float foam = clampf((waterY - groundY) / 3.5f, 0.f, 1.f) * wave;
+                        const float foam = clampf((waterY - groundY) / 4.0f, 0.f, 1.f);
                         const Vec3 waterColor{
-                            clampf(0.05f + 0.20f * foam, 0.f, 1.f),
-                            clampf(0.24f + 0.34f * shore + 0.15f * wave, 0.f, 1.f),
-                            clampf(0.40f + 0.46f * shore + 0.10f * wave, 0.f, 1.f)
+                            clampf(0.06f + 0.18f * foam, 0.f, 1.f),
+                            clampf(0.28f + 0.30f * shore, 0.f, 1.f),
+                            clampf(0.45f + 0.42f * shore, 0.f, 1.f)
                         };
-
-                        pts.push_back({x, waterY, z, waterColor.x, waterColor.y, waterColor.z, 2.55f});
-
-                        // shoreline cue
-                        if (wetness > 0.10f && wetness < 0.55f)
-                        {
-                            const Vec3 shoreColor{0.72f, 0.75f, 0.62f};
-                            pts.push_back({x, groundY + 0.12f, z, shoreColor.x, shoreColor.y, shoreColor.z, 1.4f});
-                        }
+                        pts.push_back({x, waterY, z, waterColor.x, waterColor.y, waterColor.z, 2.4f});
                     }
                 }
             }
 
-            // Current vectors in water volume
-            if (showCurrents)
-            {
-                for (int ix = -12; ix <= 12; ++ix)
-                {
-                    for (int iz = -12; iz <= 12; ++iz)
-                    {
-                        const float x = static_cast<float>(ix) * 5.8f;
-                        const float z = static_cast<float>(iz) * 5.8f;
-
-                        for (int iy = 0; iy < 3; ++iy)
-                        {
-                            const float y = sim.env.fluidLevel - 7.f + static_cast<float>(iy) * 5.0f;
-                            const Vec3 p{x, y, z};
-                            if (len(p) > sim.worldRadius * 0.95f) continue;
-
-                            const float waterY = sim.env.waterSurfaceHeight(p);
-                            const float groundY = sim.env.groundHeight(p);
-                            if (p.y > waterY - 0.5f || p.y < groundY + 0.5f) continue;
-
-                            const Vec3 flow = sim.env.fluidVelocity(p);
-                            const float flowMag = clampf(len(flow), 0.f, 2.8f);
-                            if (flowMag < 0.02f) continue;
-
-                            const Vec3 dir = normalize(flow);
-                            const float L = 0.7f + 1.3f * (flowMag / 2.8f);
-                            const Vec3 q = p + dir * L;
-
-                            const Vec3 c{
-                                clampf(0.08f + 0.18f * flowMag, 0.f, 1.f),
-                                clampf(0.45f + 0.18f * flowMag, 0.f, 1.f),
-                                clampf(0.62f + 0.24f * flowMag, 0.f, 1.f)
-                            };
-
-                            lines.push_back({p.x, p.y, p.z, q.x, q.y, q.z, c.x, c.y, c.z});
-
-                            // arrow head
-                            const Vec3 side = normalize(cross(dir, Vec3{0.f, 1.f, 0.f}));
-                            const Vec3 h1 = q - dir * 0.35f + side * 0.16f;
-                            const Vec3 h2 = q - dir * 0.35f - side * 0.16f;
-                            lines.push_back({q.x, q.y, q.z, h1.x, h1.y, h1.z, c.x, c.y, c.z});
-                            lines.push_back({q.x, q.y, q.z, h2.x, h2.y, h2.z, c.x, c.y, c.z});
-                        }
-                    }
-                }
-            }
-
-            // Sparse volumetric probes (resource fields)
-            for (int i = 0; i < 160; i++)
+            for (int i = 0; i < 180; i++)
             {
                 const Vec3 p{
                     rndf(-sim.worldRadius, sim.worldRadius),
@@ -465,12 +387,12 @@ int main()
                 const float b = sim.env.biomass(p);
 
                 const Vec3 col{
-                    clampf(0.10f + 0.50f * x, 0.f, 1.f),
-                    clampf(0.10f + 0.52f * n + 0.24f * b, 0.f, 1.f),
-                    clampf(0.16f + 0.60f * l, 0.f, 1.f)
+                    clampf(0.15f + 0.55f * x, 0.f, 1.f),
+                    clampf(0.12f + 0.55f * n + 0.25f * b, 0.f, 1.f),
+                    clampf(0.12f + 0.60f * l, 0.f, 1.f)
                 };
 
-                pts.push_back({p.x, p.y, p.z, col.x, col.y, col.z, 1.45f});
+                pts.push_back({p.x, p.y, p.z, col.x, col.y, col.z, 1.6f});
             }
         }
 
@@ -495,7 +417,7 @@ int main()
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
         glViewport(0, 0, w, h);
-        glClearColor(0.03f, 0.055f, 0.09f, 1.f);
+        glClearColor(0.015f, 0.03f, 0.055f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         const Vec3 eye{
