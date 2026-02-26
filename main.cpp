@@ -92,6 +92,24 @@ enum class AppScreen : uint8_t
     Options
 };
 
+static Vec3 biomeColor(const Biome biome)
+{
+    switch (biome)
+    {
+        case Biome::OpenOcean: return {0.05f, 0.28f, 0.62f};
+        case Biome::ReefShelf: return {0.10f, 0.44f, 0.68f};
+        case Biome::KelpLagoon: return {0.12f, 0.52f, 0.44f};
+        case Biome::Estuary: return {0.24f, 0.48f, 0.36f};
+        case Biome::Mangrove: return {0.22f, 0.40f, 0.22f};
+        case Biome::TidalFlat: return {0.44f, 0.42f, 0.28f};
+        case Biome::CoastalForest: return {0.17f, 0.50f, 0.19f};
+        case Biome::InlandWetland: return {0.18f, 0.56f, 0.34f};
+        case Biome::Savanna: return {0.58f, 0.52f, 0.26f};
+        case Biome::Alpine: return {0.62f, 0.64f, 0.66f};
+    }
+    return {0.4f, 0.4f, 0.4f};
+}
+
 struct AppSettings
 {
     int   initialPopulation = 220;
@@ -469,7 +487,7 @@ int main()
         size_t estimatedLines = 0;
         for (const auto& o : sim.organisms)
         {
-            estimatedPts += o.cells.size() + 1;
+            estimatedPts += (o.macroMode ? 18 : o.cells.size()) + 2;
             estimatedLines += o.springs.size();
         }
         pts.reserve(estimatedPts + 512);
@@ -497,28 +515,45 @@ int main()
                 lines.push_back({a.x, a.y, a.z, b.x, b.y, b.z, col.x, col.y, col.z});
             }
 
-            // cells
-            for (const auto& c : o.cells)
+            // cells / macro representation
+            const Vec3 com = Sim::organismCenterOfMass(o);
+            if (o.macroMode)
             {
-                const Vec3 wp = o.pos + c.localPos;
-
-                const float n = sim.env.nutrient(wp);
-                const float l = sim.env.light(wp);
-                const float x = sim.env.toxin(wp);
-                const float b = sim.env.biomass(wp);
-
-                const Vec3 col = {
-                    clampf(baseColor.x + 0.18f * n + 0.18f * o.pheno.aggression - 0.15f * x, 0.f, 1.f),
-                    clampf(baseColor.y + 0.22f * n + 0.10f * b - 0.05f * ageT, 0.f, 1.f),
-                    clampf(baseColor.z + 0.24f * l - 0.10f * x, 0.f, 1.f)
+                const float marine = clampf((sim.env.waterSurfaceHeight(com) - com.y) / 8.f, 0.f, 1.f);
+                const Vec3 shell = {
+                    clampf(baseColor.x + 0.22f * marine + 0.12f * o.terrestrialAffinity, 0.f, 1.f),
+                    clampf(baseColor.y + 0.12f * marine, 0.f, 1.f),
+                    clampf(baseColor.z + 0.28f * (1.f - o.terrestrialAffinity), 0.f, 1.f)
                 };
-
-                const float size = 3.4f + 2.2f * o.pheno.cellRadius;
-                pts.push_back({wp.x, wp.y, wp.z, col.x, col.y, col.z, size});
+                pts.push_back({com.x, com.y, com.z, shell.x, shell.y, shell.z, 8.0f + 5.2f * o.macroScale});
+                for (int k = 0; k < 12; ++k)
+                {
+                    const Vec3 ring = normalize(hashToVec3(o.id + static_cast<uint64_t>(k * 17 + 900)));
+                    const Vec3 rp = com + ring * (1.4f + 1.1f * o.macroScale);
+                    pts.push_back({rp.x, rp.y, rp.z, shell.x * 0.85f, shell.y * 0.9f, shell.z, 3.2f + 0.9f * o.macroScale});
+                    lines.push_back({com.x, com.y, com.z, rp.x, rp.y, rp.z, shell.x * 0.55f, shell.y * 0.65f, shell.z * 0.8f});
+                }
+            }
+            else
+            {
+                for (const auto& c : o.cells)
+                {
+                    const Vec3 wp = o.pos + c.localPos;
+                    const float n = sim.env.nutrient(wp);
+                    const float l = sim.env.light(wp);
+                    const float x = sim.env.toxin(wp);
+                    const float b = sim.env.biomass(wp);
+                    const Vec3 col = {
+                        clampf(baseColor.x + 0.18f * n + 0.18f * o.pheno.aggression - 0.15f * x, 0.f, 1.f),
+                        clampf(baseColor.y + 0.22f * n + 0.10f * b - 0.05f * ageT, 0.f, 1.f),
+                        clampf(baseColor.z + 0.24f * l - 0.10f * x, 0.f, 1.f)
+                    };
+                    const float size = 3.4f + 2.2f * o.pheno.cellRadius;
+                    pts.push_back({wp.x, wp.y, wp.z, col.x, col.y, col.z, size});
+                }
             }
 
             // COM marker
-            const Vec3 com = Sim::organismCenterOfMass(o);
             pts.push_back({com.x, com.y, com.z, 1.f, 1.f, 1.f, 2.3f});
 
             auto& trail = trails[o.id];
@@ -550,12 +585,12 @@ int main()
         // Environment layer: terrain + ocean + field probes
         if (showEnv)
         {
-            for (int ix = -24; ix <= 24; ++ix)
+            for (int ix = -36; ix <= 36; ++ix)
             {
-                for (int iz = -24; iz <= 24; ++iz)
+                for (int iz = -36; iz <= 36; ++iz)
                 {
-                    const float x = static_cast<float>(ix) * 3.2f;
-                    const float z = static_cast<float>(iz) * 3.2f;
+                    const float x = static_cast<float>(ix) * 3.8f;
+                    const float z = static_cast<float>(iz) * 3.8f;
                     const Vec3 query{x, 0.f, z};
                     const float groundY = sim.env.groundHeight(query);
                     const float waterY = sim.env.waterSurfaceHeight(query);
@@ -566,12 +601,14 @@ int main()
                         + std::abs(sim.env.groundHeight(Vec3{x, 0.f, z + 0.6f})
                             - sim.env.groundHeight(Vec3{x, 0.f, z - 0.6f}));
 
+                    const Biome biome = sim.env.biomeAt(Vec3{x, groundY + 0.6f, z});
+                    const Vec3 biomeCol = biomeColor(biome);
                     const Vec3 landColor{
-                        clampf(0.14f + 0.22f * slope, 0.f, 1.f),
-                        clampf(0.24f + 0.44f * (1.f - slope * 0.2f) + 0.18f * (1.f - shore), 0.f, 1.f),
-                        clampf(0.10f + 0.14f * (1.f - shore), 0.f, 1.f)
+                        clampf(biomeCol.x + 0.18f * slope, 0.f, 1.f),
+                        clampf(biomeCol.y + 0.20f * (1.f - slope * 0.2f) + 0.10f * (1.f - shore), 0.f, 1.f),
+                        clampf(biomeCol.z + 0.08f * (1.f - shore), 0.f, 1.f)
                     };
-                    pts.push_back({x, groundY, z, landColor.x, landColor.y, landColor.z, 2.0f});
+                    pts.push_back({x, groundY, z, landColor.x, landColor.y, landColor.z, 2.1f});
 
                     if (waterY > groundY - 1.2f)
                     {
@@ -586,7 +623,7 @@ int main()
                 }
             }
 
-            for (int i = 0; i < 180; i++)
+            for (int i = 0; i < 340; i++)
             {
                 const Vec3 h = hashToVec3(static_cast<uint64_t>(4100 + i));
                 const Vec3 p = h * sim.worldRadius;
@@ -608,16 +645,16 @@ int main()
 
             if (showCurrents)
             {
-                for (int ix = -10; ix <= 10; ix += 2)
+                for (int ix = -14; ix <= 14; ix += 2)
                 {
                     for (int iy = -3; iy <= 4; iy += 2)
                     {
-                        for (int iz = -10; iz <= 10; iz += 2)
+                        for (int iz = -14; iz <= 14; iz += 2)
                         {
                             Vec3 p{static_cast<float>(ix) * 6.f, static_cast<float>(iy) * 6.f, static_cast<float>(iz) * 6.f};
                             if (len(p) > sim.worldRadius * 0.92f) continue;
 
-                            const Vec3 velocity = sim.env.fluidVelocity(p);
+                            const Vec3 velocity = sim.env.fluidVelocity(p) + sim.env.windVelocity(p) * 0.45f;
                             const float speed = len(velocity);
                             if (speed < 0.03f) continue;
 

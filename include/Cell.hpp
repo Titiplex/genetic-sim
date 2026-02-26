@@ -49,10 +49,13 @@ struct Organism
     float offspringInvestmentReserve = 0.f;
     float oxygenStressMemory = 0.f;
     float salinityStressMemory = 0.f;
+    float terrestrialAffinity = 0.35f;
+    float macroScale = 1.f;
     uint64_t geneticSignature = 0;
     int   deme = 0;
     LifeStage stage = LifeStage::Juvenile;
     bool  alive  = true;
+    bool  macroMode = false;
 
     std::vector<Cell>   cells;
     std::vector<Spring> springs;
