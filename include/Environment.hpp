@@ -22,6 +22,7 @@ struct Environment
 {
     float worldRadius = 80.f;
     float time        = 0.f;
+    float fluidLevel  = 6.f;
 
     std::vector<BiomassPulse> biomassPulses;
 
@@ -62,6 +63,53 @@ struct Environment
             b += pulse.amount * std::exp(-len2(p - pulse.pos) / (2.f * s2));
         }
         return clampf(b, 0.f, 4.f);
+    }
+
+    [[nodiscard]] float groundHeight(const Vec3& p) const
+    {
+        const float ridge = 6.0f * std::sin(0.055f * p.x + 0.2f * std::sin(time * 0.08f))
+            + 4.5f * std::cos(0.045f * p.z - 0.15f * std::cos(time * 0.07f));
+        const float basin = -22.f + 0.08f * len(Vec3{p.x, 0.f, p.z});
+        return basin + ridge;
+    }
+
+    [[nodiscard]] Vec3 fluidVelocity(const Vec3& p) const
+    {
+        const float yRatio = clampf((p.y + worldRadius) / (2.f * worldRadius), 0.f, 1.f);
+
+        const Vec3 swirlCenter{
+            24.f * std::sin(time * 0.08f),
+            fluidLevel - 6.f + 4.f * std::sin(time * 0.06f),
+            22.f * std::cos(time * 0.05f)
+        };
+
+        const Vec3 radial = p - swirlCenter;
+        Vec3       tangent{-radial.z, 0.f, radial.x};
+        tangent = normalize(tangent);
+
+        const float vortex = std::exp(-len2(radial) / (2.f * 34.f * 34.f));
+        const float stream = 0.8f * std::sin(0.03f * p.z + time * 0.9f)
+            + 0.65f * std::cos(0.035f * p.x - time * 0.6f);
+
+        return tangent * (1.8f * vortex)
+            + Vec3{stream * (0.25f + 0.75f * yRatio), 0.15f * std::sin(0.04f * p.x + time * 0.7f), 0.f};
+    }
+
+    [[nodiscard]] Vec3 turbulence(const Vec3& p, const uint64_t seed) const
+    {
+        const float sx = std::sin(0.11f * p.x + time * 1.7f + hashToRange(seed, -3.f, 3.f));
+        const float sy = std::sin(0.08f * p.y - time * 1.4f + hashToRange(seed + 19, -3.f, 3.f));
+        const float sz = std::sin(0.10f * p.z + time * 1.9f + hashToRange(seed + 41, -3.f, 3.f));
+        return Vec3{sx, sy, sz} * 0.22f;
+    }
+
+    [[nodiscard]] float buoyancy(const Vec3& p, const float bodyScale) const
+    {
+        const float depth      = fluidLevel - p.y;
+        const float submersion = clampf(depth / 22.f, 0.f, 1.f);
+        const float lift       = (0.20f + 0.55f * submersion) * (1.15f - 0.18f * bodyScale);
+        const float gravity    = 0.15f + 0.05f * bodyScale;
+        return lift - gravity;
     }
 
     [[nodiscard]] Vec3 gradN(const Vec3& p) const
