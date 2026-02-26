@@ -4,7 +4,6 @@
 
 #include "maths/Vec3.hpp"
 
-// ======================= Organisms / Cells / Springs ==========================
 struct Cell
 {
     Vec3  localPos;
@@ -33,6 +32,15 @@ struct Organism
     float gaitPhase = 0.f;
     float age    = 0.f;
     float energy = 8.f;
+    float storedEnergy = 0.f;
+    float energyDebt = 0.f;
+    float oxidativeStress = 0.f;
+    float pathogenLoad = 0.f;
+    float immuneMemory = 0.f;
+    float neuralMemory = 0.f;
+    float lastReward = 0.f;
+    int   deme = 0;
+    LifeStage stage = LifeStage::Juvenile;
     bool  alive  = true;
 
     std::vector<Cell>   cells;
