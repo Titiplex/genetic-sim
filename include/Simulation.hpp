@@ -93,10 +93,11 @@ struct Sim
         return clampf(1.f - pop / 64.f, 0.f, 1.f);
     }
 
-    float localDensity(const Vec3& p) const
+    float localDensity(const Vec3& p, const int selfIndex) const
     {
         nearbyOrganisms(p, nearbyScratch);
-        return clampf(static_cast<float>(nearbyScratch.size()) / 28.f, 0.f, 2.5f);
+        const int count = static_cast<int>(std::count_if(nearbyScratch.begin(), nearbyScratch.end(), [&](const int idx) { return idx != selfIndex; }));
+        return clampf(static_cast<float>(count) / 28.f, 0.f, 2.5f);
     }
 
     void seedInitial(const int n)
@@ -292,7 +293,7 @@ struct Sim
             nearbyOrganisms(a.pos, nearbyScratch);
             for (int j : nearbyScratch)
             {
-                if (i == j) continue;
+                if (j <= i) continue;
                 Organism& b = organisms[j];
                 if (!b.alive) continue;
                 const float d2 = len2(b.pos - a.pos);
@@ -313,16 +314,29 @@ struct Sim
                     if (transfer > 0.f) { a.energy -= transfer; b.energy += transfer * 0.9f; }
                 }
 
-                if (a.pheno.aggression < 0.30f || a.energy < 2.f) continue;
-                const float huntRange = 2.5f + 0.08f * static_cast<float>(a.cells.size());
-                if (d2 > huntRange * huntRange) continue;
-                const float aPower = a.pheno.aggression + 0.018f * static_cast<float>(a.cells.size());
-                const float bDef = 0.5f * b.pheno.toxinResistance + 0.010f * static_cast<float>(b.cells.size());
-                const float damage = clampf((aPower - 0.4f * bDef + 0.2f * env.predationPressure(b.pos)) * dt * 4.2f, 0.f, 0.7f);
-                if (damage <= 0.f) continue;
-                b.energy -= damage;
-                b.pathogenLoad += damage * 0.05f;
-                a.energy += damage * (0.45f + 0.15f * a.pheno.microbiomeEfficiency);
+                if (kinLike && b.energy > 3.5f && a.energy < 2.5f)
+                {
+                    const float share = 0.02f * b.pheno.socialAffinity * dt * 20.f;
+                    const float transfer = std::min(share, b.energy - 3.2f);
+                    if (transfer > 0.f) { b.energy -= transfer; a.energy += transfer * 0.9f; }
+                }
+
+                auto attack = [&](Organism& attacker, Organism& defender)
+                {
+                    if (attacker.pheno.aggression < 0.30f || attacker.energy < 2.f) return;
+                    const float huntRange = 2.5f + 0.08f * static_cast<float>(attacker.cells.size());
+                    if (d2 > huntRange * huntRange) return;
+                    const float aPower = attacker.pheno.aggression + 0.018f * static_cast<float>(attacker.cells.size());
+                    const float bDef = 0.5f * defender.pheno.toxinResistance + 0.010f * static_cast<float>(defender.cells.size());
+                    const float damage = clampf((aPower - 0.4f * bDef + 0.2f * env.predationPressure(defender.pos)) * dt * 4.2f, 0.f, 0.7f);
+                    if (damage <= 0.f) return;
+                    defender.energy -= damage;
+                    defender.pathogenLoad += damage * 0.05f;
+                    attacker.energy += damage * (0.45f + 0.15f * attacker.pheno.microbiomeEfficiency);
+                };
+
+                attack(a, b);
+                attack(b, a);
             }
         }
     }
@@ -333,11 +347,12 @@ struct Sim
         const float B = env.biomass(com);
         if (B <= 0.0001f) return;
         const float request = o.pheno.scavenging * (0.02f + 0.005f * static_cast<float>(o.cells.size())) * dt * 20.f;
-        const float gain = std::min(B, request) * 0.9f;
+        const float requested = std::min(B, request);
+        const float consumed = env.consumeBiomassNear(com, requested);
+        const float gain = consumed * 0.9f;
         const float microbiomeGain = 0.75f + 0.5f * o.pheno.microbiomeEfficiency * o.microbiomeHealth;
         o.energy += gain * microbiomeGain;
         o.microbiomeHealth = clampf(o.microbiomeHealth + gain * 0.002f - 0.001f * o.pathogenLoad, 0.05f, 1.4f);
-        env.consumeBiomassNear(com, gain);
     }
 
     Vec3 computeActuation(Organism& o, const Vec3& com, const Vec3& gN, const Vec3& gL, const Vec3& gX, const Vec3& gB) const
@@ -393,6 +408,8 @@ struct Sim
             for (int idx : nearbyScratch)
             {
                 if (organisms[idx].id == o.id || !organisms[idx].alive || organisms[idx].energy <= 5.f) continue;
+                const float mateDist2 = len2(organisms[idx].pos - o.pos);
+                if (mateDist2 > 12.f * 12.f) continue;
                 const float comp = genomeCompatibility(o, organisms[idx]);
                 const float prefAlign = 1.f - std::abs(o.matePreference - comp);
                 const float score = 0.55f * comp + 0.45f * prefAlign;
@@ -453,7 +470,7 @@ struct Sim
         return true;
     }
 
-    void updateOne(Organism& o, std::vector<Organism>& newborns)
+    void updateOne(const int selfIndex, Organism& o, std::vector<Organism>& newborns)
     {
         if (!o.alive) return;
         o.age += dt;
@@ -513,7 +530,7 @@ struct Sim
 
         applyDiseaseAndImmunity(o, stress);
 
-        const float crowdPenalty = clampf(localDensity(com) * (1.f - o.pheno.socialAffinity * 0.35f), 0.f, 1.6f);
+        const float crowdPenalty = clampf(localDensity(com, selfIndex) * (1.f - o.pheno.socialAffinity * 0.35f), 0.f, 1.6f);
         const float uptake = o.pheno.nutrientAffinity * N * (0.05f + 0.010f * static_cast<float>(o.cells.size())) * (1.f - 0.18f * crowdPenalty);
         const float photo = o.pheno.photoAffinity * L * (0.03f + 0.008f * static_cast<float>(o.cells.size()));
         const float toxHit = std::max(0.f, X - 0.7f * o.pheno.toxinResistance) * (0.04f + 0.005f * static_cast<float>(o.cells.size()));
@@ -599,7 +616,7 @@ struct Sim
         huntInteractions();
         std::vector<Organism> newborns;
         newborns.reserve(organisms.size() / 4 + 8);
-        for (auto& o : organisms) updateOne(o, newborns);
+        for (int i = 0; i < static_cast<int>(organisms.size()); ++i) updateOne(i, organisms[i], newborns);
 
         for (const auto& o : organisms)
             if (!o.alive) env.depositBiomass(organismCenterOfMass(o), std::max(0.f, o.energy) + 0.45f * static_cast<float>(o.cells.size()), 4.f + 0.08f * static_cast<float>(o.cells.size()));

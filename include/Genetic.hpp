@@ -259,18 +259,29 @@ static Genome recombineGenomes(const Genome& a, const Genome& b, const float cro
         nm.name = a.modules[m].name;
         const auto& ga = a.modules[m].genes;
         const auto& gb = b.modules[m].genes;
-        const size_t cutA = ga.empty() ? 0 : static_cast<size_t>(rndi(0, static_cast<int>(ga.size()) - 1));
-        const size_t cutB = gb.empty() ? 0 : static_cast<size_t>(rndi(0, static_cast<int>(gb.size()) - 1));
-
-        for (size_t i = 0; i < ga.size(); ++i)
+        const size_t maxGenes = std::max(ga.size(), gb.size());
+        if (maxGenes == 0)
         {
-            const bool fromA = rndf() > crossingRate ? (rndf() < 0.5f) : (i <= cutA);
-            if (fromA) nm.genes.push_back(ga[i]);
-            else if (i < gb.size()) nm.genes.push_back(gb[i]);
+            nm.genes.push_back({"fallback", 0.5f, 0.f});
+            out.modules.push_back(std::move(nm));
+            continue;
         }
-        for (size_t i = nm.genes.size(); i < gb.size(); ++i)
+        const size_t cut = static_cast<size_t>(rndi(0, static_cast<int>(maxGenes) - 1));
+        for (size_t i = 0; i < maxGenes; ++i)
         {
-            if (i >= cutB || rndf() < crossingRate) nm.genes.push_back(gb[i]);
+            const bool crossoverFromA = (i <= cut);
+            const bool randomMix = rndf() > crossingRate;
+            const bool pickA = randomMix ? (rndf() < 0.5f) : crossoverFromA;
+            if (pickA)
+            {
+                if (i < ga.size()) nm.genes.push_back(ga[i]);
+                else if (i < gb.size()) nm.genes.push_back(gb[i]);
+            }
+            else
+            {
+                if (i < gb.size()) nm.genes.push_back(gb[i]);
+                else if (i < ga.size()) nm.genes.push_back(ga[i]);
+            }
         }
         if (nm.genes.empty()) nm.genes.push_back({"fallback", 0.5f, 0.f});
         out.modules.push_back(std::move(nm));

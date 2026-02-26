@@ -231,19 +231,23 @@ struct Environment
         biomassPulses.push_back({pos, amount, sigma, 0.f, 80.f + rndf(0.f, 40.f)});
     }
 
-    void consumeBiomassNear(const Vec3& pos, float requested)
+    float consumeBiomassNear(const Vec3& pos, float requested)
     {
-        if (requested <= 0.f || biomassPulses.empty()) return;
+        if (requested <= 0.f || biomassPulses.empty()) return 0.f;
+        float consumed = 0.f;
         for (auto& pulse : biomassPulses)
         {
             if (requested <= 0.f) break;
             const float d2 = len2(pos - pulse.pos);
-            const float influence = std::exp(-d2 / (2.f * pulse.sigma * pulse.sigma));
+            const float sigma = std::max(0.1f, pulse.sigma);
+            const float influence = std::exp(-d2 / (2.f * sigma * sigma));
             if (influence < 0.02f) continue;
             const float take = std::min(pulse.amount, requested * influence * 0.35f);
             pulse.amount -= take;
             requested -= take;
+            consumed += take;
         }
+        return consumed;
     }
 
     void depositToxin(const Vec3& pos, float amount, float sigma = 6.f)
