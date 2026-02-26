@@ -179,3 +179,20 @@ biologiques plausibles (compétition, stratégies, morphologies) peuvent émerge
 - Des **niches écologiques** plus nettes (zones humides, zones salines, hauteurs oxygénées, etc.).
 - Une dynamique évolutive moins “plate” grâce à la saisonnalité, la capacité de charge dynamique et l'investissement parental.
 - Un coût CPU mieux maîtrisé quand la population grandit (plasticité phénotypique asynchrone).
+
+---
+
+## Améliorations implémentées (10 changements majeurs)
+
+1. **Cycle de reproduction multi-échelles (saisonnier + circadien + lunaire)** pour des fenêtres reproductives réalistes.
+2. **Compatibilité écologique dans le choix des partenaires** (habitat/sociabilité) en plus de la compatibilité génétique.
+3. **Effet d’Allee local** : la reproduction dépend aussi d’une densité locale minimale.
+4. **Stress transgénérationnel (épigénétique abstrait)** : le stress chronique augmente la charge physiologique et impacte l’aptitude reproductive.
+5. **Transmission verticale partielle des pathogènes et du stress** parent → descendant.
+6. **Viabilité néonatale probabiliste** (sélection précoce) au lieu d’un succès de naissance toujours garanti.
+7. **Comportement de groupe émergent** (alignement/cohésion/séparation) pour schooling/flocking non déterministe.
+8. **Autophagie/fonte tissulaire de famine** : perte de cellules pour survivre temporairement avec recyclage en biomasse.
+9. **Mortalité de sénescence probabiliste (type Gompertz simplifié)** dépendant de l’âge, pathogènes, famine et stress.
+10. **Nouvelles métriques éco-évolutives** : diversité de niches (Shannon), diversité de lignées de naissances, nombre moyen de cellules.
+
+Ces modifications renforcent le réalisme sur les axes **biologie**, **écologie comportementale**, **dynamique évolutive** et **stabilité écosystémique** tout en conservant le principe de génome non hardcodé.
