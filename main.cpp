@@ -6,6 +6,7 @@
 #include <Cell.hpp>
 #include <cmath>
 #include <cstdlib>
+#include <cstdint>
 #include <iostream>
 #include <deque>
 #include <iomanip>
@@ -83,6 +84,32 @@ struct LineVertex
     float r, g, b;
     float size;
 };
+
+enum class AppScreen : uint8_t
+{
+    MainMenu,
+    Simulation,
+    Options
+};
+
+struct AppSettings
+{
+    int   initialPopulation = 220;
+    float startTimeScale    = 1.0f;
+    bool  startPaused       = false;
+    bool  showEnv           = true;
+    bool  showCurrents      = true;
+    bool  cinematicCam      = true;
+    bool  showTrails        = true;
+};
+
+static void resetSimulation(Sim& sim, const AppSettings& settings, float& timeScale, bool& paused)
+{
+    sim = Sim{};
+    sim.seedInitial(settings.initialPopulation);
+    timeScale = settings.startTimeScale;
+    paused    = settings.startPaused;
+}
 
 int main()
 {
@@ -217,25 +244,30 @@ int main()
 
     glBindVertexArray(0);
 
-    Sim sim;
-    sim.seedInitial(220);
+    Sim         sim;
+    AppSettings settings;
+    float       timeScale = settings.startTimeScale;
+    bool        paused    = settings.startPaused;
+    resetSimulation(sim, settings, timeScale, paused);
 
     double       lastTime = glfwGetTime();
     double       accum    = 0.0;
     const double fixedDt  = sim.dt;
 
-    bool  paused       = false;
-    bool  showEnv      = true;
-    bool  showCurrents = true;
-    bool  cinematicCam = true;
-    bool  showTrails   = true;
+    bool  showEnv      = settings.showEnv;
+    bool  showCurrents = settings.showCurrents;
+    bool  cinematicCam = settings.cinematicCam;
+    bool  showTrails   = settings.showTrails;
+    AppScreen appScreen = AppScreen::MainMenu;
     float camYaw       = 0.8f, camPitch = 0.5f, camDist = 180.f;
     float fogDensity   = 0.65f;
-    float timeScale    = 1.0f;
 
     std::unordered_map<uint64_t, std::deque<Vec3>> trails;
 
     bool pPrev = false, vPrev = false, rPrev = false, nPrev = false, cPrev = false, fPrev = false, tPrev = false;
+    bool enterPrev = false, mPrev = false, oPrev = false;
+    bool iPrev = false, kPrev = false, gPrev = false;
+    bool onePrev = false, twoPrev = false;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -243,58 +275,137 @@ int main()
 
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, 1);
 
+        // Global app navigation
+        const bool enterNow = (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS);
+        if (enterNow && !enterPrev && appScreen == AppScreen::MainMenu)
+        {
+            appScreen = AppScreen::Simulation;
+            resetSimulation(sim, settings, timeScale, paused);
+            showEnv      = settings.showEnv;
+            showCurrents = settings.showCurrents;
+            cinematicCam = settings.cinematicCam;
+            showTrails   = settings.showTrails;
+            trails.clear();
+            accum = 0.0;
+        }
+        enterPrev = enterNow;
+
+        const bool oNow = (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS);
+        if (oNow && !oPrev)
+        {
+            if (appScreen == AppScreen::MainMenu || appScreen == AppScreen::Simulation)
+            {
+                appScreen = AppScreen::Options;
+            }
+            else if (appScreen == AppScreen::Options)
+            {
+                appScreen = AppScreen::Simulation;
+            }
+        }
+        oPrev = oNow;
+
+        const bool mNow = (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS);
+        if (mNow && !mPrev)
+        {
+            if (appScreen != AppScreen::MainMenu)
+            {
+                appScreen = AppScreen::MainMenu;
+                paused = true;
+            }
+        }
+        mPrev = mNow;
+
+        // options menu controls
+        if (appScreen == AppScreen::Options)
+        {
+            const bool iNow = (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS);
+            if (iNow && !iPrev) settings.initialPopulation = std::min(500, settings.initialPopulation + 10);
+            iPrev = iNow;
+
+            const bool kNow = (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS);
+            if (kNow && !kPrev) settings.initialPopulation = std::max(20, settings.initialPopulation - 10);
+            kPrev = kNow;
+
+            const bool gNow = (glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS);
+            if (gNow && !gPrev)
+            {
+                settings.showEnv = !settings.showEnv;
+                showEnv = settings.showEnv;
+            }
+            gPrev = gNow;
+
+            const bool oneNow = (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS);
+            if (oneNow && !onePrev) settings.startTimeScale = std::max(0.2f, settings.startTimeScale - 0.2f);
+            onePrev = oneNow;
+
+            const bool twoNow = (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS);
+            if (twoNow && !twoPrev) settings.startTimeScale = std::min(4.0f, settings.startTimeScale + 0.2f);
+            twoPrev = twoNow;
+        }
+        else
+        {
+            iPrev = kPrev = gPrev = onePrev = twoPrev = false;
+        }
+
+        const bool simulationRunning = (appScreen == AppScreen::Simulation);
+
         // toggles (edge-triggered)
         const bool pNow = (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS);
-        if (pNow && !pPrev) paused = !paused;
+        if (simulationRunning && pNow && !pPrev) paused = !paused;
         pPrev = pNow;
 
         const bool vNow = (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS);
-        if (vNow && !vPrev) showEnv = !showEnv;
+        if (simulationRunning && vNow && !vPrev) showEnv = !showEnv;
         vPrev = vNow;
 
         const bool cNow = (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS);
-        if (cNow && !cPrev) showCurrents = !showCurrents;
+        if (simulationRunning && cNow && !cPrev) showCurrents = !showCurrents;
         cPrev = cNow;
 
         const bool rNow = (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS);
-        if (rNow && !rPrev)
+        if (simulationRunning && rNow && !rPrev)
         {
-            sim = Sim{};
-            sim.seedInitial(220);
+            resetSimulation(sim, settings, timeScale, paused);
+            showEnv      = settings.showEnv;
+            showCurrents = settings.showCurrents;
+            cinematicCam = settings.cinematicCam;
+            showTrails   = settings.showTrails;
+            trails.clear();
+            accum = 0.0;
         }
         rPrev = rNow;
 
         const bool nNow       = (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS);
-        const bool singleStep = (nNow && !nPrev && paused);
+        const bool singleStep = (simulationRunning && nNow && !nPrev && paused);
         nPrev                 = nNow;
 
         const bool fNow = (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS);
-        if (fNow && !fPrev) cinematicCam = !cinematicCam;
+        if (simulationRunning && fNow && !fPrev) cinematicCam = !cinematicCam;
         fPrev = fNow;
 
         const bool tNow = (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS);
-        if (tNow && !tPrev) showTrails = !showTrails;
+        if (simulationRunning && tNow && !tPrev) showTrails = !showTrails;
         tPrev = tNow;
 
-        if (glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS) timeScale = std::min(6.f, timeScale + 0.015f);
-        if (glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS) timeScale = std::max(0.1f, timeScale - 0.015f);
-        if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS) fogDensity = std::max(0.08f, fogDensity - 0.008f);
-        if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS) fogDensity = std::min(1.7f, fogDensity + 0.008f);
+        if (simulationRunning && (glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS)) timeScale = std::min(6.f, timeScale + 0.015f);
+        if (simulationRunning && (glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS)) timeScale = std::max(0.1f, timeScale - 0.015f);
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS) fogDensity = std::max(0.08f, fogDensity - 0.008f);
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS) fogDensity = std::min(1.7f, fogDensity + 0.008f);
 
         // camera controls
-        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) camYaw -= 0.02f;
-        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) camYaw += 0.02f;
-        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) camPitch = clampf(camPitch + 0.02f, -1.4f, 1.4f);
-        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) camPitch = clampf(camPitch - 0.02f, -1.4f, 1.4f);
-        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) camDist = std::max(40.f, camDist - 2.f);
-        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) camDist = std::min(400.f, camDist + 2.f);
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) camYaw -= 0.02f;
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) camYaw += 0.02f;
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) camPitch = clampf(camPitch + 0.02f, -1.4f, 1.4f);
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) camPitch = clampf(camPitch - 0.02f, -1.4f, 1.4f);
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) camDist = std::max(40.f, camDist - 2.f);
+        if (simulationRunning && glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) camDist = std::min(400.f, camDist + 2.f);
 
         const double now   = glfwGetTime();
         const double frame = now - lastTime;
         lastTime           = now;
         accum += frame * timeScale;
 
-        if (!paused)
+        if (simulationRunning && !paused)
         {
             int maxSubSteps = 6;
             int steps       = 0;
@@ -306,7 +417,7 @@ int main()
             }
             if (steps == maxSubSteps && accum > 1.0) accum = 0.0;
         }
-        else if (singleStep)
+        else if (simulationRunning && singleStep)
         {
             sim.step();
             accum = 0.0;
@@ -440,11 +551,8 @@ int main()
 
             for (int i = 0; i < 180; i++)
             {
-                const Vec3 p{
-                    rndf(-sim.worldRadius, sim.worldRadius),
-                    rndf(-sim.worldRadius, sim.worldRadius),
-                    rndf(-sim.worldRadius, sim.worldRadius)
-                };
+                const Vec3 h = hashToVec3(static_cast<uint64_t>(4100 + i));
+                const Vec3 p = h * sim.worldRadius;
                 if (len(p) > sim.worldRadius) continue;
 
                 const float n = sim.env.nutrient(p);
@@ -587,6 +695,25 @@ int main()
                 << " | x" << std::setprecision(1) << timeScale
                 << (cinematicCam ? " | CAM:follow" : " | CAM:free")
                 << (showTrails ? " | trails" : " | no-trails");
+            glfwSetWindowTitle(window, title.str().c_str());
+        }
+
+        if (appScreen == AppScreen::MainMenu)
+        {
+            std::ostringstream title;
+            title << "EvoLife3D | MENU  [Enter] lancer  [O] options  [Esc] quitter"
+                  << " | Population initiale: " << settings.initialPopulation
+                  << " | Vitesse: x" << std::fixed << std::setprecision(1) << settings.startTimeScale;
+            glfwSetWindowTitle(window, title.str().c_str());
+        }
+        else if (appScreen == AppScreen::Options)
+        {
+            std::ostringstream title;
+            title << "EvoLife3D | OPTIONS  [I/K] population +/-  [1/2] vitesse +/-  [G] env "
+                  << (settings.showEnv ? "on" : "off")
+                  << "  [O] retour"
+                  << " | Pop=" << settings.initialPopulation
+                  << " | x" << std::fixed << std::setprecision(1) << settings.startTimeScale;
             glfwSetWindowTitle(window, title.str().c_str());
         }
     }
