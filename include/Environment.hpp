@@ -14,6 +14,20 @@ enum class Scenario : uint8_t
     InvasiveSpecies
 };
 
+enum class Biome : uint8_t
+{
+    OpenOcean,
+    ReefShelf,
+    KelpLagoon,
+    Estuary,
+    Mangrove,
+    TidalFlat,
+    CoastalForest,
+    InlandWetland,
+    Savanna,
+    Alpine
+};
+
 struct BiomassPulse
 {
     Vec3  pos;
@@ -35,7 +49,7 @@ struct ToxicPulse
 
 struct Environment
 {
-    float worldRadius = 80.f;
+    float worldRadius = 130.f;
     float time        = 0.f;
     float fluidLevel  = 6.f;
     float temperatureBaseline = 0.52f;
@@ -49,6 +63,62 @@ struct Environment
 
     [[nodiscard]] float seasonal() const { return 0.5f + 0.5f * std::sin(time * 0.035f); }
     [[nodiscard]] float droughtCycle() const { return 0.5f + 0.5f * std::sin(time * 0.022f + 1.4f); }
+
+    [[nodiscard]] Biome biomeAt(const Vec3& p) const
+    {
+        const float shore = shorelineBlend(p);
+        const float h = humidity(p);
+        const float t = temperature(p);
+        const float altitude = p.y - groundHeight(p);
+        const float rugged = std::abs(std::sin(0.012f * p.x) * std::cos(0.016f * p.z));
+        const float marine = clampf((waterSurfaceHeight(p) - p.y) / 7.f, 0.f, 1.f);
+        if (marine > 0.85f && shore < 0.2f) return Biome::OpenOcean;
+        if (marine > 0.55f && h > 0.65f && t > 0.55f) return Biome::KelpLagoon;
+        if (marine > 0.4f) return Biome::ReefShelf;
+        if (shore > 0.78f && h > 0.7f && t > 0.55f) return Biome::Mangrove;
+        if (shore > 0.65f && h > 0.55f) return Biome::Estuary;
+        if (shore > 0.52f) return Biome::TidalFlat;
+        if (h > 0.72f && altitude < 8.f) return Biome::InlandWetland;
+        if (rugged > 0.72f || altitude > 20.f) return Biome::Alpine;
+        if (h > 0.45f) return Biome::CoastalForest;
+        return Biome::Savanna;
+    }
+
+    [[nodiscard]] float biomeFertility(const Biome biome) const
+    {
+        switch (biome)
+        {
+            case Biome::OpenOcean: return 0.85f;
+            case Biome::ReefShelf: return 1.1f;
+            case Biome::KelpLagoon: return 1.2f;
+            case Biome::Estuary: return 1.25f;
+            case Biome::Mangrove: return 1.35f;
+            case Biome::TidalFlat: return 1.0f;
+            case Biome::CoastalForest: return 0.95f;
+            case Biome::InlandWetland: return 1.1f;
+            case Biome::Savanna: return 0.78f;
+            case Biome::Alpine: return 0.62f;
+        }
+        return 1.f;
+    }
+
+    [[nodiscard]] float biomeMarineBias(const Biome biome) const
+    {
+        switch (biome)
+        {
+            case Biome::OpenOcean:
+            case Biome::ReefShelf:
+            case Biome::KelpLagoon: return 1.f;
+            case Biome::Estuary:
+            case Biome::Mangrove:
+            case Biome::TidalFlat:
+            case Biome::InlandWetland: return 0.5f;
+            case Biome::CoastalForest:
+            case Biome::Savanna:
+            case Biome::Alpine: return 0.f;
+        }
+        return 0.5f;
+    }
 
     [[nodiscard]] float temperature(const Vec3& p) const
     {
@@ -181,9 +251,17 @@ struct Environment
 
     [[nodiscard]] float groundHeight(const Vec3& p) const
     {
-        const float ridge = 6.0f * std::sin(0.055f * p.x + 0.2f * std::sin(time * 0.08f)) + 4.5f * std::cos(0.045f * p.z - 0.15f * std::cos(time * 0.07f));
-        const float basin = -22.f + 0.08f * len(Vec3{p.x, 0.f, p.z});
-        return basin + ridge + 2.2f * obstacleField(p);
+        const float ridge = 9.0f * std::sin(0.038f * p.x + 0.2f * std::sin(time * 0.08f)) + 6.5f * std::cos(0.032f * p.z - 0.15f * std::cos(time * 0.07f));
+        const float basin = -30.f + 0.12f * len(Vec3{p.x, 0.f, p.z});
+        const float plateaus = 8.f * std::sin(0.011f * p.x - 0.01f * p.z);
+        return basin + ridge + plateaus + 2.6f * obstacleField(p);
+    }
+
+    [[nodiscard]] Vec3 windVelocity(const Vec3& p) const
+    {
+        const float stream = std::sin(0.018f * p.z + time * 0.17f) + 0.8f * std::cos(0.013f * p.x - time * 0.11f);
+        const float updraft = 0.25f * std::sin(0.02f * p.x + 0.015f * p.z + time * 0.4f);
+        return Vec3{0.8f * stream, updraft, 0.55f * std::cos(0.014f * p.z + time * 0.2f)};
     }
 
     [[nodiscard]] Vec3 fluidVelocity(const Vec3& p) const
@@ -235,7 +313,7 @@ struct Environment
     void step(const float dt)
     {
         time += dt;
-        fluidLevel = 4.8f + 2.8f * std::sin(time * 0.04f);
+        fluidLevel = 5.4f + 3.8f * std::sin(time * 0.04f);
         climateShock = clampf(climateShock * std::exp(-0.06f * dt) + std::max(0.f, std::sin(time * 0.011f + 1.2f)) * 0.0012f, 0.f, 1.4f);
         if (rndf() < dt * 0.0025f) climateShock = clampf(climateShock + rndf(0.2f, 0.7f), 0.f, 1.4f);
         for (auto& p : biomassPulses)

@@ -30,8 +30,8 @@ struct Sim
 
     float dt = 0.035f;
     float cellSpacing = 1.25f;
-    int targetPopulation = 180;
-    float worldRadius = 80.f;
+    int targetPopulation = 320;
+    float worldRadius = 130.f;
 
     std::unordered_map<IVec3, std::vector<int>, IVec3Hash> grid;
     float gridSize = 7.f;
@@ -134,11 +134,12 @@ struct Sim
             o.geneticSignature = genomeSignature(o.genome);
             o.matePreference = rndf(0.f, 1.f);
             o.socialDrive = rndf(0.f, 1.f);
-            o.pos = {rndf(-25.f, 25.f), rndf(-25.f, 25.f), rndf(-25.f, 25.f)};
+            o.pos = {rndf(-55.f, 55.f), rndf(-30.f, 45.f), rndf(-55.f, 55.f)};
             o.vel = {rndf(-0.2f, 0.2f), rndf(-0.2f, 0.2f), rndf(-0.2f, 0.2f)};
             o.energy = rndf(6.f, 12.f);
             o.storedEnergy = rndf(1.f, 3.f);
             o.deme = rndi(0, 4);
+            o.terrestrialAffinity = clampf(0.2f + 0.6f * o.pheno.hydricTolerance + rndf(-0.15f, 0.15f), 0.f, 1.f);
             o.cells.push_back({Vec3{0, 0, 0}, Vec3{0, 0, 0}, 1.f, 0.f, 1.f});
             organisms.push_back(std::move(o));
         }
@@ -226,6 +227,18 @@ struct Sim
     void integrateInternalBody(Organism& o) const
     {
         if (o.cells.empty()) return;
+        if (o.macroMode)
+        {
+            const int stride = std::max(1, static_cast<int>(o.cells.size() / 24));
+            for (int i = 0; i < static_cast<int>(o.cells.size()); i += stride)
+            {
+                o.cells[i].localVel *= 0.9f;
+                o.cells[i].localPos += o.cells[i].localVel * dt;
+                o.cells[i].age += dt;
+            }
+            recenterLocalBody(o);
+            return;
+        }
         applySprings(o);
         applySoftCellRepulsion(o);
         for (auto& c : o.cells)
@@ -266,8 +279,9 @@ struct Sim
 
     void growOrganism(Organism& o) const
     {
-        if (o.cells.size() >= 64 || o.energy < 2.f) return;
-        const float desire = o.pheno.growthBias * (0.35f + 0.65f * clampf(o.energy / o.pheno.splitThreshold, 0.f, 2.f));
+        if (o.cells.size() >= 220 || o.energy < 2.f) return;
+        const float macroPenalty = o.macroMode ? 0.45f : 1.f;
+        const float desire = macroPenalty * o.pheno.growthBias * (0.35f + 0.65f * clampf(o.energy / o.pheno.splitThreshold, 0.f, 2.f));
         if (rndf() > clampf(desire * dt * 1.7f, 0.f, 0.30f)) return;
         const Vec3 dir = chooseGrowthDirection(o);
         int anchorIdx = 0;
@@ -458,6 +472,7 @@ struct Sim
         child.matePreference = clampf((o.matePreference + rndf(-0.08f, 0.08f)), 0.f, 1.f);
         child.socialDrive = clampf((o.socialDrive + rndf(-0.08f, 0.08f)), 0.f, 1.f);
         child.microbiomeHealth = clampf(o.microbiomeHealth * rndf(0.7f, 1.05f), 0.05f, 1.2f);
+        child.terrestrialAffinity = clampf(o.terrestrialAffinity + rndf(-0.08f, 0.08f), 0.f, 1.f);
         child.pos = o.pos + normalize(Vec3{rndf(-1, 1), rndf(-1, 1), rndf(-1, 1)}) * rndf(2.f, 6.f);
         child.vel = o.vel + Vec3{rndf(-0.4f, 0.4f), rndf(-0.4f, 0.4f), rndf(-0.4f, 0.4f)};
         const float investment = clampf(0.24f + 0.22f * o.pheno.parentalInvestment, 0.16f, 0.62f);
@@ -492,6 +507,14 @@ struct Sim
         return true;
     }
 
+    void updateMacroState(Organism& o)
+    {
+        const size_t c = o.cells.size();
+        if (!o.macroMode && c >= 48) o.macroMode = true;
+        if (o.macroMode && c <= 30) o.macroMode = false;
+        o.macroScale = clampf(0.85f + std::pow(static_cast<float>(std::max<size_t>(1, c)) / 24.f, 0.55f), 0.85f, 4.5f);
+    }
+
     void updateOne(const int selfIndex, Organism& o, std::vector<Organism>& newborns)
     {
         if (!o.alive) return;
@@ -500,7 +523,8 @@ struct Sim
         updateLifeStage(o);
         integrateInternalBody(o);
         Vec3 com = organismCenterOfMass(o);
-        const float bodyScale = clampf(static_cast<float>(o.cells.size()) / 18.f, 0.35f, 3.0f);
+        updateMacroState(o);
+        const float bodyScale = clampf(static_cast<float>(o.cells.size()) / 18.f, 0.35f, 4.8f);
         const float N = env.nutrient(com), L = env.light(com), X = env.toxin(com);
         const float O2 = env.oxygen(com), S = env.salinity(com);
         const float temp = env.temperature(com);
@@ -536,24 +560,33 @@ struct Sim
         steer = normalize(steer);
 
         const Vec3 flow = env.fluidVelocity(com), gust = env.turbulence(com, o.id + static_cast<uint64_t>(o.age * 100.f));
+        const Vec3 wind = env.windVelocity(com);
         const float buoyancy = env.buoyancy(com, bodyScale);
         const Vec3 actuation = computeActuation(o, com, gN, gL, gX, gB);
+        const float submersion = clampf((env.waterSurfaceHeight(com) - com.y) / 9.f, 0.f, 1.f);
+        const float landFactor = 1.f - submersion;
+        const Biome biome = env.biomeAt(com);
+        const float marineBias = env.biomeMarineBias(biome);
+        const float habitatAffinity = clampf((1.f - std::abs(o.terrestrialAffinity - (1.f - marineBias))), 0.25f, 1.25f);
         const Vec3 obstaclePush = normalize(Vec3{-env.obstacleField(com) * com.x, 0.f, -env.obstacleField(com) * com.z});
         const float corridorBoost = env.corridorField(com);
         const float dispersal = clampf(o.pheno.dispersalDrive * (0.35f + localDensity(com, selfIndex)), 0.f, 2.2f);
 
         o.vel += steer * (0.42f * dt * circadian);
-        o.vel += flow * (0.34f * dt);
+        o.vel += flow * (0.34f * dt * submersion);
+        o.vel += wind * (0.26f * dt * landFactor);
         o.vel += gust * dt;
-        o.vel += actuation * (0.95f * dt);
+        o.vel += actuation * (0.95f * dt * (0.7f + 0.3f * habitatAffinity));
         o.vel += obstaclePush * (0.12f * dt);
         o.vel += normalize(com * -1.f) * (0.09f * dt * dispersal);
         o.vel *= (0.96f + 0.05f * corridorBoost);
         o.vel.y += buoyancy * dt * (1.0f + 0.2f * (1.3f - o.pheno.bodyDensity));
+        if (landFactor > 0.45f) o.vel.y -= 0.13f * dt * (0.4f + o.pheno.bodyDensity);
         const Vec3 relFluid = o.vel - flow;
         o.vel -= relFluid * (0.10f + 0.06f * bodyScale + 0.03f * o.pheno.bodyDensity) * dt;
 
-        o.vel = clampVec(o.vel, 5.6f / (1.0f + 0.024f * static_cast<float>(o.cells.size())));
+        const float macroDrag = o.macroMode ? 0.76f : 1.f;
+        o.vel = clampVec(o.vel, macroDrag * 5.6f / (1.0f + 0.024f * static_cast<float>(o.cells.size())));
         o.pos += o.vel * dt * 6.0f;
 
         const float floorY = env.groundHeight(o.pos) + o.pheno.cellRadius * 0.9f;
@@ -563,12 +596,15 @@ struct Sim
         applyDiseaseAndImmunity(o, stress);
 
         const float crowdPenalty = clampf(localDensity(com, selfIndex) * (1.f - o.pheno.socialAffinity * 0.35f), 0.f, 1.6f);
-        const float uptake = o.pheno.nutrientAffinity * N * (0.05f + 0.010f * static_cast<float>(o.cells.size())) * (1.f - 0.18f * crowdPenalty);
-        const float photo = o.pheno.photoAffinity * L * (0.03f + 0.008f * static_cast<float>(o.cells.size()));
+        const float fertility = env.biomeFertility(biome);
+        const float marineFit = clampf(1.f - std::abs((1.f - o.terrestrialAffinity) - marineBias), 0.35f, 1.35f);
+        const float landFit = clampf(1.f - std::abs(o.terrestrialAffinity - (1.f - marineBias)), 0.35f, 1.35f);
+        const float uptake = o.pheno.nutrientAffinity * N * fertility * (0.05f + 0.010f * static_cast<float>(o.cells.size())) * (1.f - 0.18f * crowdPenalty) * (submersion * marineFit + landFactor * landFit);
+        const float photo = o.pheno.photoAffinity * L * (0.03f + 0.008f * static_cast<float>(o.cells.size())) * (0.75f + 0.25f * landFactor);
         const float toxHit = std::max(0.f, X - 0.7f * o.pheno.toxinResistance) * (0.04f + 0.005f * static_cast<float>(o.cells.size()));
-        const float moveCost = 0.015f * len(o.vel) * (1.0f + 0.03f * static_cast<float>(o.cells.size()));
+        const float moveCost = 0.015f * len(o.vel) * (1.0f + 0.03f * static_cast<float>(o.cells.size())) * (1.1f - 0.2f * habitatAffinity);
         const float actuationCost = 0.010f * len(actuation) * (0.6f + 0.8f * o.pheno.motorDrive);
-        const float maint = o.pheno.baseMetabolism * (1.0f + 0.055f * static_cast<float>(o.cells.size()));
+        const float maint = o.pheno.baseMetabolism * (1.0f + 0.055f * static_cast<float>(o.cells.size())) * (o.macroMode ? 0.82f : 1.f);
         const float ageDrain = 0.0008f * o.age;
         const float thermalCost = 0.02f * thermalMismatch * (1.f + o.pheno.bodyDensity);
         const float hydrationCost = 0.018f * hydricMismatch * (1.f + 0.5f * o.pheno.bodyDensity);
@@ -577,7 +613,8 @@ struct Sim
         const float osmoticCost = 0.024f * osmotic;
         const float stressOxCost = 0.018f * o.oxidativeStress;
         const float microbiomeTax = 0.016f * (1.1f - o.microbiomeHealth);
-        const float delta = (uptake + photo - toxHit - moveCost - actuationCost - maint - ageDrain - thermalCost - hydrationCost - immuneCost - stressOxCost - microbiomeTax - hypoxiaCost - osmoticCost) * dt * 20.f;
+        const float outOfWaterStress = landFactor * std::max(0.f, 0.55f - o.terrestrialAffinity) * 0.08f;
+        const float delta = (uptake + photo - toxHit - moveCost - actuationCost - maint - ageDrain - thermalCost - hydrationCost - immuneCost - stressOxCost - microbiomeTax - hypoxiaCost - osmoticCost - outOfWaterStress) * dt * 20.f;
         o.energy += delta;
         if (o.energy < 0.f)
         {
@@ -598,6 +635,8 @@ struct Sim
         o.salinityStressMemory = clampf(o.salinityStressMemory * 0.992f + osmotic * 0.03f, 0.f, 2.2f);
         if (toxHit > 0.08f) env.depositToxin(com, toxHit * 0.04f, 4.5f + 0.08f * static_cast<float>(o.cells.size()));
         o.lastReward = clampf(delta, -1.f, 1.f);
+        const float targetTerrestrial = (landFactor > 0.5f) ? 1.f : 0.f;
+        o.terrestrialAffinity = clampf(o.terrestrialAffinity * 0.995f + targetTerrestrial * 0.005f + clampf(delta, -0.2f, 0.2f) * 0.002f, 0.f, 1.f);
 
         if (delta > 0.f && rndf() < 0.09f * dt * 20.f) env.depositNutrient(com, 0.04f * delta, 3.5f + 0.05f * static_cast<float>(o.cells.size()));
         digestBiomass(o);
@@ -672,7 +711,7 @@ struct Sim
         metrics.extinctions += static_cast<int>(before - organisms.size());
         for (auto& n : newborns) organisms.push_back(std::move(n));
 
-        targetPopulation = static_cast<int>(clampf(150.f + 90.f * (1.f - env.climateShock) + 20.f * env.seasonal(), 120.f, 260.f));
+        targetPopulation = static_cast<int>(clampf(260.f + 180.f * (1.f - env.climateShock) + 40.f * env.seasonal(), 180.f, 520.f));
 
         if (static_cast<int>(organisms.size()) < targetPopulation / 3)
         {
@@ -686,10 +725,11 @@ struct Sim
                 o.geneticSignature = genomeSignature(o.genome);
                 o.matePreference = rndf(0.f, 1.f);
                 o.socialDrive = rndf(0.f, 1.f);
-                o.pos = {rndf(-20, 20), rndf(-20, 20), rndf(-20, 20)};
+                o.pos = {rndf(-45, 45), rndf(-25, 45), rndf(-45, 45)};
                 o.vel = {rndf(-.1f, .1f), rndf(-.1f, .1f), rndf(-.1f, .1f)};
                 o.energy = rndf(6.f, 10.f);
                 o.deme = rndi(0, 4);
+                o.terrestrialAffinity = clampf(0.2f + 0.6f * o.pheno.hydricTolerance + rndf(-0.2f, 0.2f), 0.f, 1.f);
                 o.cells.push_back({Vec3{0, 0, 0}, Vec3{0, 0, 0}, 1.f, 0.f, 1.f});
                 organisms.push_back(std::move(o));
             }
