@@ -28,6 +28,7 @@ struct Sim
 
     std::unordered_map<IVec3, std::vector<int>, IVec3Hash> grid;
     float gridSize = 7.f;
+    mutable std::vector<int> nearbyScratch;
 
     SimMetrics metrics;
     int steps = 0;
@@ -64,13 +65,14 @@ struct Sim
     void buildGrid()
     {
         grid.clear();
+        grid.reserve(organisms.size() * 2);
         for (int i = 0; i < static_cast<int>(organisms.size()); ++i)
             if (organisms[i].alive) grid[cellOf(organisms[i].pos)].push_back(i);
     }
 
-    std::vector<int> nearbyOrganisms(const Vec3& p)
+    void nearbyOrganisms(const Vec3& p, std::vector<int>& out) const
     {
-        std::vector<int> out;
+        out.clear();
         const auto [x, y, z] = cellOf(p);
         for (int dx = -1; dx <= 1; ++dx)
             for (int dy = -1; dy <= 1; ++dy)
@@ -79,7 +81,6 @@ struct Sim
                     const IVec3 q{x + dx, y + dy, z + dz};
                     if (auto it = grid.find(q); it != grid.end()) out.insert(out.end(), it->second.begin(), it->second.end());
                 }
-        return out;
     }
 
     void seedInitial(const int n)
@@ -206,8 +207,8 @@ struct Sim
         std::vector<std::pair<float, int>> ds;
         ds.reserve(newCellIndex);
         for (int i = 0; i < newCellIndex; ++i) ds.emplace_back(len2(o.cells[i].localPos - o.cells[newCellIndex].localPos), i);
-        std::sort(ds.begin(), ds.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         int linkCount = std::min(1 + (o.pheno.adhesionBias > 0.7f) + (o.pheno.adhesionBias > 1.15f), static_cast<int>(ds.size()));
+        if (linkCount < static_cast<int>(ds.size())) std::nth_element(ds.begin(), ds.begin() + linkCount, ds.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (int k = 0; k < linkCount; ++k)
         {
             Spring s;
@@ -257,13 +258,12 @@ struct Sim
 
     void huntInteractions()
     {
-        buildGrid();
         for (int i = 0; i < static_cast<int>(organisms.size()); ++i)
         {
             Organism& a = organisms[i];
             if (!a.alive || a.pheno.aggression < 0.30f || a.energy < 2.f) continue;
-            auto nearby = nearbyOrganisms(a.pos);
-            for (int j : nearby)
+            nearbyOrganisms(a.pos, nearbyScratch);
+            for (int j : nearbyScratch)
             {
                 if (i == j) continue;
                 Organism& b = organisms[j];
@@ -350,10 +350,9 @@ struct Sim
         const bool sexual = rndf() < clampf(0.25f + 0.55f * o.pheno.reproductiveFlex - 0.25f * o.energyDebt, 0.05f, 0.85f);
         if (sexual)
         {
-            buildGrid();
-            auto nearby = nearbyOrganisms(o.pos);
             int mateIdx = -1;
-            for (int idx : nearby)
+            nearbyOrganisms(o.pos, nearbyScratch);
+            for (int idx : nearbyScratch)
                 if (organisms[idx].id != o.id && organisms[idx].alive && organisms[idx].deme != o.deme && organisms[idx].energy > 5.f) { mateIdx = idx; break; }
             if (mateIdx >= 0)
             {
@@ -383,8 +382,9 @@ struct Sim
         std::vector<std::pair<float, int>> order;
         order.reserve(o.cells.size());
         for (int i = 0; i < static_cast<int>(o.cells.size()); ++i) order.emplace_back(len2(o.cells[i].localPos), i);
-        std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        if (take < static_cast<int>(order.size())) std::nth_element(order.begin(), order.begin() + take, order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
         std::vector<int> idxs;
+        idxs.reserve(take);
         for (int k = 0; k < take && k < static_cast<int>(order.size()); ++k) idxs.push_back(order[k].second);
         std::sort(idxs.begin(), idxs.end(), std::greater<int>());
         for (int idx : idxs)
@@ -514,6 +514,7 @@ struct Sim
     {
         ++steps;
         env.step(dt);
+        buildGrid();
         huntInteractions();
         std::vector<Organism> newborns;
         newborns.reserve(organisms.size() / 4 + 8);
