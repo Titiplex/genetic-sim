@@ -159,19 +159,19 @@ biologiques plausibles (compétition, stratégies, morphologies) peuvent émerge
 
 ### Changements très importants (impact majeur)
 
-1. **Ajout d'un champ d'oxygène environnemental (O2) + gradient** : l'oxygène varie selon altitude, immersion, humidité, biomasse et climat.
-2. **Ajout d'un champ de salinité + coût osmotique** : introduit un stress physiologique réaliste et des compromis écologiques.
-3. **Plasticité phénotypique asynchrone** : le phénotype n'est plus recalculé à chaque tick, mais selon une cadence adaptative (stress/apprentissage), ce qui améliore réalisme + performance.
-4. **Régulation démographique par capacité de charge dynamique** : la population cible dépend désormais du climat/saisons au lieu d'être fixe.
+1. **Ajout d'un champ de CO2 dissous + stress acide** : coût physiologique supplémentaire qui rend les milieux profonds/pollués plus sélectifs.
+2. **Ajout de zones hydrothermales** : nouvelle source énergétique (chimiosynthèse abstraite) qui crée des niches marines alternatives.
+3. **Mise en dormance métabolique dynamique** : adaptation non déterministe au stress (survie court terme vs reproduction/croissance).
+4. **Préparation accélération CPU/GPU-like** : pipeline OpenMP activable dans CMake pour paralléliser les agrégations lourdes et préparer un futur offload.
 
 ### Autres changements importants
 
-5. **Saisonnalité de la reproduction** : une fenêtre reproductive fluctuante évite une reproduction uniforme non réaliste.
-6. **Réduction de l'endogamie** : pénalité de choix du partenaire si compatibilité génétique trop élevée.
-7. **Investissement parental héritable** : réserve énergétique parentale transférée au nouveau-né + coût de cooldown modulé.
-8. **Dispersion adaptative** : pression de dispersion augmentée par densité locale et trait génétique dédié.
-9. **Recyclage biogéochimique** : dépôt local de nutriments (via excrétion/activité) qui rétroagit sur les niches.
-10. **Métriques enrichies** : stress oxygène, stress salinité, taux reproductif, complexité génomique moyenne exportés dans les métriques.
+5. **Saisonnalité cachée en cache de tick** : la fenêtre reproductive est calculée une seule fois par step (stabilité/perf).
+6. **Reproduction freinée en dormance** : évite les explosions de naissances irréalistes sous stress extrême.
+7. **Rafales mutationnelles sous choc climatique** : adaptation rapide lors des crises, sans hardcoder de trait cible.
+8. **Migration inter-dèmes stochastique** : augmente le flux de gènes entre niches et limite les isolements artificiels.
+9. **Mémoire de stress acide** : pression cumulative qui structure mieux les dynamiques à long terme.
+10. **Métriques enrichies** : export du stress acide et du ratio de dormance pour analyse écologique/évolutive.
 
 ### Résultat attendu
 

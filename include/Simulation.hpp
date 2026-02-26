@@ -3,6 +3,9 @@
 #include <Environment.hpp>
 #include <fstream>
 #include <unordered_map>
+#if defined(EVO_HAS_OPENMP)
+#include <omp.h>
+#endif
 
 static uint64_t g_nextId = 1;
 
@@ -17,6 +20,8 @@ struct SimMetrics
     float climateStress = 0.f;
     float oxygenStress = 0.f;
     float salinityStress = 0.f;
+    float acidStress = 0.f;
+    float dormancyRatio = 0.f;
     float reproductionRate = 0.f;
     float meanGenomeComplexity = 0.f;
     int extinctions = 0;
@@ -40,6 +45,7 @@ struct Sim
     SimMetrics metrics;
     int steps = 0;
     int birthsThisStep = 0;
+    float cachedSeasonality = 1.f;
 
     static Vec3 organismCenterOfMass(const Organism& o)
     {
@@ -416,9 +422,9 @@ struct Sim
         else o.stage = LifeStage::Senescent;
     }
 
-    void applyDiseaseAndImmunity(Organism& o, const float stress)
+    void applyDiseaseAndImmunity(Organism& o, const float stress, const float localPredation)
     {
-        o.pathogenLoad += (0.0025f + 0.006f * stress + 0.003f * env.predationPressure(o.pos)) * dt;
+        o.pathogenLoad += (0.0025f + 0.006f * stress + 0.003f * localPredation) * dt;
         const float immuneResponse = (o.pheno.immunity + 0.5f * o.immuneMemory) * dt * 0.04f;
         o.pathogenLoad = std::max(0.f, o.pathogenLoad - immuneResponse);
         o.immuneMemory = clampf(o.immuneMemory * 0.995f + o.pathogenLoad * 0.0009f, 0.f, 1.5f);
@@ -426,9 +432,9 @@ struct Sim
 
     bool attemptReproduction(Organism& o, std::vector<Organism>& newborns)
     {
-        const float season = reproductionSeasonality();
+        const float season = cachedSeasonality;
         const float popPressure = clampf(static_cast<float>(organisms.size()) / std::max(1.f, static_cast<float>(targetPopulation)), 0.2f, 2.6f);
-        if (!(o.energy > o.pheno.splitThreshold && o.age > 6.f && o.cells.size() >= 2 && o.reproductionCooldown <= 0.f && rndf() < season / popPressure)) return false;
+        if (!(o.energy > o.pheno.splitThreshold && o.age > 6.f && o.cells.size() >= 2 && o.reproductionCooldown <= 0.f && o.dormancy < 0.65f && rndf() < season / popPressure)) return false;
         Organism child;
         child.id = g_nextId++;
         const bool sexual = rndf() < clampf(0.25f + 0.55f * o.pheno.reproductiveFlex - 0.25f * o.energyDebt, 0.05f, 0.85f);
@@ -467,6 +473,7 @@ struct Sim
             child.genome = mutateGenome(o.genome, o.pheno.mutationRate);
             child.deme = o.deme;
         }
+        if (env.climateShock > 0.7f && rndf() < 0.22f) child.genome = mutateGenome(child.genome, 0.12f + 0.2f * env.climateShock);
         child.pheno = interpretGenome(child.genome, env.temperature(o.pos), env.nutrient(o.pos), env.toxin(o.pos));
         child.geneticSignature = genomeSignature(child.genome);
         child.matePreference = clampf((o.matePreference + rndf(-0.08f, 0.08f)), 0.f, 1.f);
@@ -527,13 +534,17 @@ struct Sim
         const float bodyScale = clampf(static_cast<float>(o.cells.size()) / 18.f, 0.35f, 4.8f);
         const float N = env.nutrient(com), L = env.light(com), X = env.toxin(com);
         const float O2 = env.oxygen(com), S = env.salinity(com);
+        const float localPredation = env.predationPressure(com);
+        const float co2 = env.dissolvedCO2(com);
+        const float vent = env.hydrothermalVent(com);
         const float temp = env.temperature(com);
         const float humid = env.humidity(com);
         float thermalMismatch = std::abs(temp - 0.55f) * (1.5f - o.pheno.thermalTolerance);
         float hydricMismatch = std::max(0.f, 0.5f - humid) * (1.5f - o.pheno.hydricTolerance);
         const float hypoxia = std::max(0.f, 0.7f - O2) * (1.4f - o.pheno.oxygenTolerance);
         const float osmotic = std::abs(S - 0.75f) * (1.4f - o.pheno.osmoregulation);
-        float stress = clampf(0.5f * X + 0.35f * hydricMismatch + 0.25f * thermalMismatch + 0.28f * hypoxia + 0.2f * osmotic + 0.2f * env.predationPressure(com) + 0.25f * env.climateShock, 0.f, 2.8f);
+        const float acidStress = std::max(0.f, co2 - (0.55f * o.pheno.toxinResistance + 0.45f * o.pheno.immunity));
+        float stress = clampf(0.5f * X + 0.35f * hydricMismatch + 0.25f * thermalMismatch + 0.28f * hypoxia + 0.2f * osmotic + 0.18f * acidStress + 0.2f * localPredation + 0.25f * env.climateShock + 0.12f * vent, 0.f, 2.8f);
         if (shouldRefreshPhenotype(o, stress))
         {
             o.pheno = interpretGenome(o.genome, temp, N, stress);
@@ -541,7 +552,7 @@ struct Sim
         }
         thermalMismatch = std::abs(temp - 0.55f) * (1.5f - o.pheno.thermalTolerance);
         hydricMismatch = std::max(0.f, 0.5f - humid) * (1.5f - o.pheno.hydricTolerance);
-        stress = clampf(0.5f * X + 0.35f * hydricMismatch + 0.25f * thermalMismatch + 0.28f * hypoxia + 0.2f * osmotic + 0.2f * env.predationPressure(com) + 0.25f * env.climateShock, 0.f, 2.8f);
+        stress = clampf(0.5f * X + 0.35f * hydricMismatch + 0.25f * thermalMismatch + 0.28f * hypoxia + 0.2f * osmotic + 0.18f * acidStress + 0.2f * localPredation + 0.25f * env.climateShock + 0.12f * vent, 0.f, 2.8f);
         if (o.stage == LifeStage::Juvenile)
         {
             o.pheno.motorDrive *= 0.98f;
@@ -593,13 +604,14 @@ struct Sim
         if (o.pos.y < floorY) { o.pos.y = floorY; if (o.vel.y < 0.f) o.vel.y *= -0.18f; o.vel.x *= 0.92f; o.vel.z *= 0.92f; }
         if (const float r = len(o.pos); r > worldRadius) { const Vec3 inward = normalize(o.pos) * -1.f; o.vel += inward * dt * 4.f; o.pos = normalize(o.pos) * worldRadius; o.vel *= 0.8f; }
 
-        applyDiseaseAndImmunity(o, stress);
+        applyDiseaseAndImmunity(o, stress, localPredation);
 
         const float crowdPenalty = clampf(localDensity(com, selfIndex) * (1.f - o.pheno.socialAffinity * 0.35f), 0.f, 1.6f);
         const float fertility = env.biomeFertility(biome);
         const float marineFit = clampf(1.f - std::abs((1.f - o.terrestrialAffinity) - marineBias), 0.35f, 1.35f);
         const float landFit = clampf(1.f - std::abs(o.terrestrialAffinity - (1.f - marineBias)), 0.35f, 1.35f);
-        const float uptake = o.pheno.nutrientAffinity * N * fertility * (0.05f + 0.010f * static_cast<float>(o.cells.size())) * (1.f - 0.18f * crowdPenalty) * (submersion * marineFit + landFactor * landFit);
+        const float chemo = vent * (0.012f + 0.004f * static_cast<float>(o.cells.size())) * (0.35f + 0.65f * submersion);
+        const float uptake = o.pheno.nutrientAffinity * (N + chemo) * fertility * (0.05f + 0.010f * static_cast<float>(o.cells.size())) * (1.f - 0.18f * crowdPenalty) * (submersion * marineFit + landFactor * landFit);
         const float photo = o.pheno.photoAffinity * L * (0.03f + 0.008f * static_cast<float>(o.cells.size())) * (0.75f + 0.25f * landFactor);
         const float toxHit = std::max(0.f, X - 0.7f * o.pheno.toxinResistance) * (0.04f + 0.005f * static_cast<float>(o.cells.size()));
         const float moveCost = 0.015f * len(o.vel) * (1.0f + 0.03f * static_cast<float>(o.cells.size())) * (1.1f - 0.2f * habitatAffinity);
@@ -611,10 +623,12 @@ struct Sim
         const float immuneCost = 0.02f * o.pathogenLoad * (0.5f + o.pheno.immunity);
         const float hypoxiaCost = 0.028f * hypoxia * (1.f + o.pheno.bodyDensity);
         const float osmoticCost = 0.024f * osmotic;
+        const float acidCost = 0.021f * acidStress;
         const float stressOxCost = 0.018f * o.oxidativeStress;
         const float microbiomeTax = 0.016f * (1.1f - o.microbiomeHealth);
         const float outOfWaterStress = landFactor * std::max(0.f, 0.55f - o.terrestrialAffinity) * 0.08f;
-        const float delta = (uptake + photo - toxHit - moveCost - actuationCost - maint - ageDrain - thermalCost - hydrationCost - immuneCost - stressOxCost - microbiomeTax - hypoxiaCost - osmoticCost - outOfWaterStress) * dt * 20.f;
+        const float dormancyTax = o.dormancy * (0.45f * uptake + 0.4f * photo);
+        const float delta = (uptake + photo - dormancyTax - toxHit - moveCost - actuationCost - maint - ageDrain - thermalCost - hydrationCost - immuneCost - stressOxCost - microbiomeTax - hypoxiaCost - osmoticCost - acidCost - outOfWaterStress) * dt * 20.f;
         o.energy += delta;
         if (o.energy < 0.f)
         {
@@ -633,6 +647,9 @@ struct Sim
         o.microbiomeHealth = clampf(o.microbiomeHealth - dt * (0.0012f * X + 0.0008f * o.pathogenLoad), 0.03f, 1.5f);
         o.oxygenStressMemory = clampf(o.oxygenStressMemory * 0.992f + hypoxia * 0.03f, 0.f, 2.2f);
         o.salinityStressMemory = clampf(o.salinityStressMemory * 0.992f + osmotic * 0.03f, 0.f, 2.2f);
+        o.acidStressMemory = clampf(o.acidStressMemory * 0.992f + acidStress * 0.028f, 0.f, 2.2f);
+        const float dormancyTarget = clampf(0.35f * stress + 0.2f * o.energyDebt - 0.22f * o.pheno.reproductiveFlex, 0.f, 1.f);
+        o.dormancy = clampf(o.dormancy * 0.985f + dormancyTarget * 0.015f, 0.f, 1.f);
         if (toxHit > 0.08f) env.depositToxin(com, toxHit * 0.04f, 4.5f + 0.08f * static_cast<float>(o.cells.size()));
         o.lastReward = clampf(delta, -1.f, 1.f);
         const float targetTerrestrial = (landFactor > 0.5f) ? 1.f : 0.f;
@@ -644,6 +661,7 @@ struct Sim
         attemptReproduction(o, newborns);
 
         if (o.energy > o.pheno.splitThreshold * 0.75f) o.offspringInvestmentReserve = clampf(o.offspringInvestmentReserve + 0.02f * dt * o.pheno.parentalInvestment, 0.f, 2.6f);
+        if (rndf() < dt * (0.004f + 0.012f * o.pheno.dispersalDrive + 0.006f * localDensity(com, selfIndex))) o.deme = (o.deme + rndi(1, 4)) % 5;
         if (o.energy <= -3.f || o.age > o.pheno.maxAge || o.pathogenLoad > 3.2f || o.heatStressMemory > 1.8f || o.oxygenStressMemory > 1.9f) o.alive = false;
     }
 
@@ -651,10 +669,14 @@ struct Sim
     {
         if (organisms.empty()) return;
         float fitSum = 0.f, fitSq = 0.f;
-        float coop = 0.f, disease = 0.f, climate = 0.f, oxygen = 0.f, salinity = 0.f, genomeComplexity = 0.f;
+        float coop = 0.f, disease = 0.f, climate = 0.f, oxygen = 0.f, salinity = 0.f, acid = 0.f, dormancy = 0.f, genomeComplexity = 0.f;
         std::unordered_map<int, int> demeCount;
-        for (const auto& o : organisms)
+#if defined(EVO_HAS_OPENMP)
+#pragma omp parallel for reduction(+:fitSum,fitSq,coop,disease,climate,oxygen,salinity,acid,dormancy,genomeComplexity) schedule(static)
+#endif
+        for (int i = 0; i < static_cast<int>(organisms.size()); ++i)
         {
+            const auto& o = organisms[static_cast<size_t>(i)];
             const float fitness = std::max(0.f, o.energy + 0.5f * o.storedEnergy - o.energyDebt - 0.4f * o.pathogenLoad);
             fitSum += fitness;
             fitSq += fitness * fitness;
@@ -663,9 +685,11 @@ struct Sim
             climate += 0.5f * (o.heatStressMemory + o.hydrationStressMemory);
             oxygen += o.oxygenStressMemory;
             salinity += o.salinityStressMemory;
+            acid += o.acidStressMemory;
+            dormancy += o.dormancy;
             for (const auto& m : o.genome.modules) genomeComplexity += static_cast<float>(m.genes.size());
-            demeCount[o.deme]++;
         }
+        for (const auto& o : organisms) demeCount[o.deme]++;
         const float n = static_cast<float>(organisms.size());
         metrics.meanFitness = fitSum / n;
         metrics.fitnessStd = std::sqrt(std::max(0.f, fitSq / n - metrics.meanFitness * metrics.meanFitness));
@@ -681,6 +705,8 @@ struct Sim
         metrics.climateStress = climate / std::max(1.f, n);
         metrics.oxygenStress = oxygen / std::max(1.f, n);
         metrics.salinityStress = salinity / std::max(1.f, n);
+        metrics.acidStress = acid / std::max(1.f, n);
+        metrics.dormancyRatio = dormancy / std::max(1.f, n);
         metrics.meanGenomeComplexity = genomeComplexity / std::max(1.f, n);
         metrics.reproductionRate = static_cast<float>(birthsThisStep) / std::max(1.f, n);
     }
@@ -689,7 +715,7 @@ struct Sim
     {
         if (steps % 200 != 0) return;
         std::ofstream f("sim_metrics.csv", std::ios::app);
-        f << steps << "," << organisms.size() << "," << metrics.heterozygosity << "," << metrics.meanFitness << "," << metrics.fitnessStd << "," << metrics.trophicStability << "," << metrics.cooperationIndex << "," << metrics.diseaseLoad << "," << metrics.climateStress << "," << metrics.oxygenStress << "," << metrics.salinityStress << "," << metrics.reproductionRate << "," << metrics.meanGenomeComplexity << "," << metrics.extinctions << "," << metrics.speciations << "\n";
+        f << steps << "," << organisms.size() << "," << metrics.heterozygosity << "," << metrics.meanFitness << "," << metrics.fitnessStd << "," << metrics.trophicStability << "," << metrics.cooperationIndex << "," << metrics.diseaseLoad << "," << metrics.climateStress << "," << metrics.oxygenStress << "," << metrics.salinityStress << "," << metrics.acidStress << "," << metrics.dormancyRatio << "," << metrics.reproductionRate << "," << metrics.meanGenomeComplexity << "," << metrics.extinctions << "," << metrics.speciations << "\n";
     }
 
     void step()
@@ -697,6 +723,7 @@ struct Sim
         ++steps;
         birthsThisStep = 0;
         env.step(dt);
+        cachedSeasonality = reproductionSeasonality();
         buildGrid();
         huntInteractions();
         std::vector<Organism> newborns;

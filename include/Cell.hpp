@@ -51,6 +51,9 @@ struct Organism
     float salinityStressMemory = 0.f;
     float terrestrialAffinity = 0.35f;
     float macroScale = 1.f;
+    float dormancy = 0.f;
+    float acidStressMemory = 0.f;
+    float nicheFidelity = 0.f;
     uint64_t geneticSignature = 0;
     int   deme = 0;
     LifeStage stage = LifeStage::Juvenile;
