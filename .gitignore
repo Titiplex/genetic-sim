@@ -45,5 +45,5 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 
-/glad/
+/third_party/
 /cmake-build-debug/
