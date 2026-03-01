@@ -23,6 +23,44 @@ namespace evo
             return mix64(master + k * 0x9E3779B97F4A7C15ULL);
         };
 
+        p.gateSharpness = hashToRange(H(15), 0.6f, 3.0f);
+
+        for (int k = 0; k < Phenotype::K; ++k)
+        {
+            auto HK = [&](const uint64_t kk)
+            {
+                return mix64(master ^ static_cast<uint64_t>(k) * 0xD1B54A32D192ED03ULL ^ kk);
+            };
+
+            CellMode m;
+
+            // Gains raisonnables (évite explosion)
+            m.gUptakeN = hashToRange(HK(1), 0.2f, 2.0f);
+            m.gPhoto   = hashToRange(HK(2), 0.0f, 2.2f);
+            m.gDigestB = hashToRange(HK(3), 0.0f, 2.0f);
+            m.gResistX = hashToRange(HK(4), 0.2f, 2.4f);
+
+            m.gAttack   = hashToRange(HK(5), 0.0f, 1.6f);
+            m.gAdhesion = hashToRange(HK(6), 0.6f, 1.7f);
+            m.gMaint    = hashToRange(HK(7), 0.7f, 1.8f);
+
+            // Gating weights
+            for (int i                          = 0; i < CellMode::F; ++i)
+                m.gateW[static_cast<size_t>(i)] =
+                    hashToRange(HK(100 + static_cast<uint64_t>(i)), -2.0f, 2.0f);
+
+            m.gateBias = hashToRange(HK(200), -1.0f, 1.0f);
+
+            // Tint for debugging/visualization (stable)
+            m.tint = {
+                hashToRange(HK(300), 0.4f, 1.0f),
+                hashToRange(HK(301), 0.4f, 1.0f),
+                hashToRange(HK(302), 0.4f, 1.0f),
+            };
+
+            p.modes[static_cast<size_t>(k)] = m;
+        }
+
         p.nutrientAffinity = hashToRange(H(1), 0.1f, 2.2f);
         p.photoAffinity    = hashToRange(H(2), 0.0f, 2.0f);
         p.toxinResistance  = hashToRange(H(3), 0.0f, 1.8f);
@@ -37,9 +75,6 @@ namespace evo
         p.splitThreshold = hashToRange(H(10), 10.f, 40.f);
         p.mutationRate   = hashToRange(H(11), 0.01f, 0.18f);
         p.cellRadius     = hashToRange(H(12), 0.4f, 1.0f);
-
-        p.diffSharpness = hashToRange(H(13), 0.5f, 3.0f);
-        p.diffBias      = hashToRange(H(14), -1.0f, 1.0f);
 
         for (int i = 0; i < 16; ++i)
             p.w[i] = hashToRange(H(100 + static_cast<uint64_t>(i)), -2.0f, 2.0f);

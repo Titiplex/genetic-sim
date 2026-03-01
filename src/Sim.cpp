@@ -31,6 +31,7 @@ namespace evo
             o.energy = m_rng.uniform(6.f, 12.f);
 
             o.cells.push_back({Vec3{0, 0, 0}, Vec3{0, 0, 0}, 0.f, 1.f});
+            updateCellModes(o);
             m_orgs.push_back(std::move(o));
         }
     }
@@ -241,6 +242,8 @@ namespace evo
         if (newIdx <= 0)
             return;
 
+        const auto &mNew = o.pheno.modes[static_cast<size_t>(o.cells[static_cast<size_t>(newIdx)].modeId)];
+
         std::vector<std::pair<float, int>> ds;
         ds.reserve(static_cast<size_t>(newIdx));
         for (int i = 0; i < newIdx; ++i)
@@ -260,8 +263,6 @@ namespace evo
             linkCount++;
         linkCount = std::min(linkCount, static_cast<int>(ds.size()));
 
-        const uint8_t tNew = o.cells[static_cast<size_t>(newIdx)].type;
-
         for (int k = 0; k < linkCount; ++k)
         {
             const int j = ds[static_cast<size_t>(k)].second;
@@ -270,13 +271,7 @@ namespace evo
             s.b       = j;
             s.restLen = clampf(std::sqrt(ds[static_cast<size_t>(k)].first), 0.45f, 2.6f);
 
-            float typeStiff = 1.0f;
-            if (tNew == 2)
-                typeStiff = 1.35f; // C: plus rigide
-            else
-                if (tNew == 1)
-                    typeStiff = 0.85f; // B: plus souple
-            s.stiffness = (5.f + 6.0f * o.pheno.adhesionBias) * typeStiff;
+            s.stiffness = (5.f + 6.0f * o.pheno.adhesionBias) * clampf(mNew.gAdhesion, 0.6f, 1.8f);
 
             s.damping = 0.35f;
             o.springs.push_back(s);
@@ -345,14 +340,14 @@ namespace evo
             nc.localVel = dir * 0.08f;
             nc.age      = 0.f;
             nc.mass     = 1.f;
-            nc.type     = 0;
-            nc.typeMix  = 1.f;
+            nc.modeId   = 0;
             o.cells.push_back(nc);
 
-            // définir le type immédiatement selon env
-            const int  newIdx                         = static_cast<int>(o.cells.size()) - 1;
-            const Vec3 wpNew                          = o.pos + o.cells[static_cast<size_t>(newIdx)].localPos;
-            o.cells[static_cast<size_t>(newIdx)].type = chooseCellType(o, wpNew, newIdx);
+            const int  newIdx = static_cast<int>(o.cells.size()) - 1;
+            const Vec3 wpNew = o.pos + o.cells[static_cast<size_t>(newIdx)].localPos;
+            o.cells[static_cast<size_t>(newIdx)].modeId = chooseCellMode(
+                o, wpNew, o.cells[static_cast<size_t>(newIdx)].localPos, 0.f,
+                newIdx);
 
             connectNewCell(o, static_cast<int>(o.cells.size()) - 1);
             o.energy -= 0.55f + 0.035f * static_cast<float>(o.cells.size());
@@ -381,13 +376,21 @@ namespace evo
                 if (!b.alive)
                     continue;
 
+                float gAttack = 0.f;
+                for (const auto &c : a.cells)
+                    gAttack += a.pheno.modes[static_cast<size_t>(c.modeId)].gAttack;
+                gAttack /= std::max(1.f, static_cast<float>(a.cells.size()));
+                gAttack = clampf(gAttack, 0.f, 1.8f);
+
                 if (const float huntRange = 2.5f + 0.08f * static_cast<float>(a.cells.size());
                     len2(b.pos - a.pos) > huntRange * huntRange)
                     continue;
 
-                const float aPower = a.pheno.aggression + 0.018f * static_cast<float>(a.cells.size());
-                const float bDef   = 0.5f * b.pheno.toxinResistance + 0.010f * static_cast<float>(b.cells.
-                                                                                                    size());
+                const float aPower = (a.pheno.aggression + 0.6f * gAttack) + 0.018f * static_cast<float>(a.
+                                                                                                         cells
+                                                                                                         .size());
+                const float bDef = 0.5f * b.pheno.toxinResistance + 0.010f * static_cast<float>(b.cells.
+                                                                                                  size());
 
                 const float damage = clampf((aPower - 0.4f * bDef) * dt * 4.2f, 0.f, 0.7f);
                 if (damage <= 0.f)
@@ -401,19 +404,20 @@ namespace evo
         }
     }
 
-    void Sim::digestBiomass(Organism &o)
+    void Sim::digestBiomass(Organism &o, float gDigestB)
     {
         const Vec3  com = centerOfMass(o);
         const float B   = m_env.biomass(com);
         if (B <= 0.0001f)
             return;
 
-        const float request = o.pheno.scavenging * (0.02f + 0.005f * static_cast<float>(o.cells.size())) * dt
-                              * 20.f;
-        const float gain = std::min(B, request) * 0.9f;
+        gDigestB = clampf(gDigestB, 0.f, 2.2f);
 
-        o.energy += gain * 0.8f;
-        m_env.consumeBiomassNear(com, gain);
+        const float request    = gDigestB * (0.02f + 0.005f * static_cast<float>(o.cells.size())) * dt * 20.f;
+        const float eaten      = std::min(B, request);
+        const float efficiency = 0.5f + 0.35f * (gDigestB / 2.2f);
+        o.energy += eaten * efficiency;
+        m_env.consumeBiomassNear(com, eaten);
     }
 
     void Sim::updateOne(Organism &o, std::vector<Organism> &newborns)
@@ -423,7 +427,24 @@ namespace evo
 
         o.age += dt;
         integrateBody(o);
-        updateCellTypes(o);
+        updateCellModes(o);
+
+        float gUptakeN = 0.f, gPhoto = 0.f, gDigestB = 0.f, gResistX = 0.f, gMaint = 0.f;
+        for (const auto &c : o.cells)
+        {
+            const auto &m = o.pheno.modes[static_cast<size_t>(c.modeId)];
+            gUptakeN += m.gUptakeN;
+            gPhoto += m.gPhoto;
+            gDigestB += m.gDigestB;
+            gResistX += m.gResistX;
+            gMaint += m.gMaint;
+        }
+        const float inv = 1.0f / std::max(1.f, static_cast<float>(o.cells.size()));
+        gUptakeN *= inv;
+        gPhoto *= inv;
+        gDigestB *= inv;
+        gResistX *= inv;
+        gMaint *= inv;
 
         const Vec3  com = centerOfMass(o);
         const float N   = m_env.nutrient(com);
@@ -435,11 +456,12 @@ namespace evo
         const Vec3 gX = m_env.gradX(com);
         const Vec3 gB = m_env.gradB(com);
 
-        Vec3 steer = normalize(gN) * (0.38f * o.pheno.nutrientAffinity) + normalize(gL) * (
-                         0.25f * o.pheno.photoAffinity) +
-                     normalize(gB) * (0.20f * o.pheno.scavenging) -
-                     normalize(gX) * (0.50f * (1.2f - clampf(o.pheno.toxinResistance, 0.f, 1.2f))) +
-                     hashToVec3(o.id + static_cast<uint64_t>(o.age * 10.0f)) * 0.12f;
+        Vec3 steer =
+            normalize(gN) * (0.38f * o.pheno.nutrientAffinity)
+            + normalize(gL) * (0.25f * o.pheno.photoAffinity)
+            + normalize(gB) * (0.15f * clampf(gDigestB, 0.0f, 2.2f))
+            - normalize(gX) * (0.50f * (1.2f - clampf(o.pheno.toxinResistance, 0.f, 1.2f)))
+            + hashToVec3(o.id + static_cast<uint64_t>(o.age * 10.0f)) * 0.12f;
 
         if (len2(steer) < 1e-6f)
             steer = Vec3{m_rng.uniform(-1, 1), m_rng.uniform(-1, 1), m_rng.uniform(-1, 1)};
@@ -456,41 +478,34 @@ namespace evo
             o.pos = normalize(o.pos) * worldRadius;
         }
 
-        int countA = 0, countB = 0, countC = 0;
-        for (const auto &c : o.cells)
-        {
-            if (c.type == 0)
-                ++countA;
-            else if (c.type == 1)
-                ++countB;
-            else
-                ++countC;
-        }
-
         const auto sizeF = static_cast<float>(o.cells.size());
-        const float aF    = static_cast<float>(countA) / std::max(1.f, sizeF);
-        const float bF    = static_cast<float>(countB) / std::max(1.f, sizeF);
-        const float cF    = static_cast<float>(countC) / std::max(1.f, sizeF);
 
-        // A: meilleure absorption nutriments/biomasse
-        const float uptake = o.pheno.nutrientAffinity * N * (0.035f + 0.018f * sizeF) * (0.65f + 0.7f * aF);
+        // nutriments
+        const float uptake = o.pheno.nutrientAffinity * N
+                             * (0.035f + 0.012f * sizeF)
+                             * clampf(gUptakeN, 0.2f, 2.2f);
 
-        // B: meilleure photo
-        const float photo = o.pheno.photoAffinity * L * (0.020f + 0.012f * sizeF) * (0.55f + 0.9f * bF);
+        // photo
+        const float photo = o.pheno.photoAffinity * L
+                            * (0.020f + 0.010f * sizeF)
+                            * clampf(gPhoto, 0.0f, 2.4f);
 
-        // C: mieux résister, mais cher en maintenance (géré plus bas)
-        const float localResist = clampf(o.pheno.toxinResistance * (0.7f + 0.8f * cF), 0.f, 2.4f);
-        const float toxHit      = std::max(0.f, X - 0.7f * localResist) * (0.040f + 0.005f * sizeF);
+        // tox
+        const float localResist = clampf(o.pheno.toxinResistance * clampf(gResistX, 0.2f, 2.6f), 0.f, 3.0f);
+        const float toxHit      = std::max(0.f, X - 0.7f * localResist)
+                                  * (0.040f + 0.005f * sizeF);
+
+        // maint
+        const float maint = o.pheno.baseMetabolism
+                            * (1.0f + 0.055f * sizeF)
+                            * clampf(gMaint, 0.6f, 2.0f);
 
         const float moveCost = 0.015f * len(o.vel) * (1.0f + 0.03f * static_cast<float>(o.cells.size()));
-        const float maint    = o.pheno.baseMetabolism
-                               * (1.0f + 0.055f * static_cast<float>(o.cells.size()))
-                               * (1.0f + 0.35f * cF); // cellules "combat" coûtent cher
         const float ageDrain = 0.0008f * o.age;
 
         o.energy += (uptake + photo - toxHit - moveCost - maint - ageDrain) * dt * 20.f;
 
-        digestBiomass(o);
+        digestBiomass(o, gDigestB);
         grow(o);
 
         // reproduction
@@ -517,6 +532,8 @@ namespace evo
             }
             if (child.cells.empty())
                 child.cells.push_back({Vec3{0, 0, 0}, Vec3{0, 0, 0}, 0.f, 1.f});
+
+            updateCellModes(child);
 
             // recentre child
             {
@@ -596,60 +613,105 @@ namespace evo
         }
     }
 
-    uint8_t Sim::chooseCellType(const Organism &o, const Vec3 &worldPos, const int cellIndex) const
+    float Sim::localDensity(const Organism &o, const int idx)
+    {
+        const Vec3  p     = o.cells[static_cast<size_t>(idx)].localPos;
+        int         count = 0;
+        const float r     = 1.8f * o.pheno.cellRadius;
+        const float r2    = r * r;
+
+        for (int j = 0; j < static_cast<int>(o.cells.size()); ++j)
+        {
+            if (j == idx)
+                continue;
+            if (len2(o.cells[static_cast<size_t>(j)].localPos - p) < r2)
+                ++count;
+        }
+        // normalize roughly into 0..1
+        return clampf(static_cast<float>(count) / 10.0f, 0.f, 1.f);
+    }
+
+    uint8_t Sim::chooseCellMode(const Organism &o,
+                                const Vec3 &    worldPos,
+                                const Vec3 &    localPos,
+                                const float     cellAge,
+                                const int       cellIndex) const
     {
         const float N = m_env.nutrient(worldPos);
         const float L = m_env.light(worldPos);
         const float X = m_env.toxin(worldPos);
         const float B = m_env.biomass(worldPos);
 
-        // Bruit stable par cellule (évite uniformité parfaite, mais reste héritable)
-        const uint64_t base   = mix64(o.id ^ static_cast<uint64_t>(cellIndex) * 0x9E3779B97F4A7C15ULL);
-        const float    noiseA = hashToRange(base + 11, -0.15f, 0.15f);
-        const float    noiseB = hashToRange(base + 23, -0.15f, 0.15f);
-        const float    noiseC = hashToRange(base + 37, -0.15f, 0.15f);
+        const Vec3  comL     = localCOM(o);
+        const float dist     = len(localPos - comL);
+        const float distNorm = clampf(dist / (6.0f + 0.15f * static_cast<float>(o.cells.size())), 0.f, 1.f);
 
-        // Scores bruts (avant softmax)
-        // o.pheno.w[0..2] sont déjà génétiques; on les recycle comme "préférences"
-        float sA = (0.9f * N + 0.7f * B) * (0.6f + 0.4f * o.pheno.nutrientAffinity) + 0.20f * o.pheno.w[0] +
-                   noiseA;
-        float sB = 1.1f * L * (0.6f + 0.4f * o.pheno.photoAffinity) + 0.20f * o.pheno.w[1] + noiseB;
-        float sC = 0.8f * X * (0.6f + 0.5f * o.pheno.toxinResistance) + 0.25f * o.pheno.w[2]
-                   + 0.35f * o.pheno.aggression + noiseC;
+        const float dens    = localDensity(o, cellIndex);
+        const float ageNorm = clampf(cellAge / 25.f, 0.f, 1.f);
 
-        // Biais global du phénotype (génétique)
-        sA += 0.35f * -o.pheno.diffBias;
-        sB += 0.35f * 0.0f;
-        sC += 0.35f * o.pheno.diffBias;
+        const float f[CellMode::F] = {
+            clampf(N / 2.5f, 0.f, 1.f),
+            clampf(L / 1.8f, 0.f, 1.f),
+            clampf(X / 2.2f, 0.f, 1.f),
+            clampf(B / 4.0f, 0.f, 1.f),
+            distNorm,
+            dens,
+            ageNorm,
+            1.0f,
+        };
 
-        // Choix tranché via softmax/sharpness (diffSharpness)
-        const float k = clampf(o.pheno.diffSharpness, 0.4f, 4.0f);
-        const float m = std::max(sA, std::max(sB, sC));
+        // Stable per-cell randomness to break ties (but still heritable-ish)
+        const uint64_t base = mix64(o.id ^ static_cast<uint64_t>(cellIndex) * 0x9E3779B97F4A7C15ULL);
 
-        const float eA  = std::exp((sA - m) * k);
-        const float eB  = std::exp((sB - m) * k);
-        const float eC  = std::exp((sC - m) * k);
-        const float sum = eA + eB + eC;
+        // Softmax over modes
+        float scores[Phenotype::K];
+        float maxS = -1e9f;
 
-        // Tiebreak déterministe
-        const float r  = hashToUnit(base + 999);
-        const float pA = eA / sum;
-        const float pB = eB / sum;
+        for (int k = 0; k < Phenotype::K; ++k)
+        {
+            const auto &m = o.pheno.modes[static_cast<size_t>(k)];
 
-        if (r < pA)
-            return 0;
-        if (r < pA + pB)
-            return 1;
-        return 2;
+            float s = m.gateBias;
+            for (int i = 0; i < CellMode::F; ++i)
+                s += m.gateW[static_cast<size_t>(i)] * f[i];
+
+            // small deterministic noise per (cell,k)
+            s += hashToRange(base + static_cast<uint64_t>(k) * 131, -0.08f, 0.08f);
+
+            scores[k] = s;
+            maxS      = std::max(maxS, s);
+        }
+
+        const float sharp  = clampf(o.pheno.gateSharpness, 0.5f, 4.0f);
+        float       expSum = 0.f;
+        float       probs[Phenotype::K];
+
+        for (int k = 0; k < Phenotype::K; ++k)
+        {
+            const float e = std::exp((scores[k] - maxS) * sharp);
+            probs[k]      = e;
+            expSum += e;
+        }
+
+        // Deterministic sampling (not purely argmax)
+        const float r   = hashToUnit(base + 777);
+        float       acc = 0.f;
+        for (int k = 0; k < Phenotype::K; ++k)
+        {
+            acc += probs[k] / expSum;
+            if (r <= acc)
+                return static_cast<uint8_t>(k);
+        }
+        return Phenotype::K - 1;
     }
 
-    void Sim::updateCellTypes(Organism &o) const
+    void Sim::updateCellModes(Organism &o) const
     {
         for (int i = 0; i < static_cast<int>(o.cells.size()); ++i)
         {
-            const Vec3 wp                           = o.pos + o.cells[static_cast<size_t>(i)].localPos;
-            o.cells[static_cast<size_t>(i)].type    = chooseCellType(o, wp, i);
-            o.cells[static_cast<size_t>(i)].typeMix = 1.f;
+            auto &     c  = o.cells[static_cast<size_t>(i)];
+            const Vec3 wp = o.pos + c.localPos;
+            c.modeId      = chooseCellMode(o, wp, c.localPos, c.age, i);
         }
     }
 } // namespace evo
