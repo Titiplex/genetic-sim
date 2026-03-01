@@ -14,6 +14,9 @@ namespace evo
         Vec3  localVel{};
         float age  = 0.f;
         float mass = 1.f;
+
+        uint8_t type = 0;
+        float typeMix = 1.f;
     };
 
     struct Spring
@@ -107,11 +110,14 @@ namespace evo
             void integrateBody(Organism &o) const;
 
             static void connectNewCell(Organism &o, int newIdx);
-            void grow(Organism &o);
+            void grow(Organism &o) const;
 
             void huntInteractions();
             void digestBiomass(Organism &o);
 
             void updateOne(Organism &o, std::vector<Organism> &newborns);
+
+            uint8_t chooseCellType(const Organism& o, const Vec3& worldPos, int cellIndex) const;
+            void updateCellTypes(Organism& o) const;
     };
 } // namespace evo

@@ -38,6 +38,9 @@ namespace evo
         p.mutationRate   = hashToRange(H(11), 0.01f, 0.18f);
         p.cellRadius     = hashToRange(H(12), 0.4f, 1.0f);
 
+        p.diffSharpness = hashToRange(H(13), 0.5f, 3.0f);
+        p.diffBias      = hashToRange(H(14), -1.0f, 1.0f);
+
         for (int i = 0; i < 16; ++i)
             p.w[i] = hashToRange(H(100 + static_cast<uint64_t>(i)), -2.0f, 2.0f);
         for (int i = 0; i < 8; ++i)
@@ -54,7 +57,7 @@ namespace evo
         return p;
     }
 
-    std::string mutateAllele(const std::string &s, const float rate, Rng &rng)
+    std::string mutateAllele(const std::string &s, const float rate, const Rng &rng)
     {
         static const std::string alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         std::string              out      = s.empty() ? "a" : s;
@@ -80,7 +83,7 @@ namespace evo
         return out;
     }
 
-    Genome mutateGenome(const Genome &parent, const float mutationRate, Rng &rng)
+    Genome mutateGenome(const Genome &parent, const float mutationRate, const Rng &rng)
     {
         Genome g = parent;
         if (g.genes.empty())

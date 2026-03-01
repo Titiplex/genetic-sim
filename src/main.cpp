@@ -164,6 +164,10 @@ int main()
                     clampf(base.z + 0.25f * l - 0.10f * x, 0.f, 1.f),
                 };
 
+                if (c.type == 0) { col.y = clampf(col.y + 0.18f, 0.f, 1.f); } // A
+                if (c.type == 1) { col.z = clampf(col.z + 0.20f, 0.f, 1.f); } // B
+                if (c.type == 2) { col.x = clampf(col.x + 0.22f, 0.f, 1.f); } // C
+
                 const float radius = 0.55f * o.pheno.cellRadius; // world scale
                 inst.push_back({wp.x, wp.y, wp.z, col.x, col.y, col.z, radius});
 

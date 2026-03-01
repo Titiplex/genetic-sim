@@ -33,6 +33,9 @@ namespace evo
         float mutationRate   = 0.06f;
         float cellRadius     = 0.65f;
 
+        float diffSharpness = 1.0f;
+        float diffBias = 0.0f;
+
         std::array<float, 16> w{};
         std::array<Vec3, 8>   basis{};
         std::array<float, 8>  basisGain{};
@@ -42,6 +45,6 @@ namespace evo
 
     Phenotype interpretGenome(const Genome &g);
 
-    std::string mutateAllele(const std::string &s, float rate, class Rng &rng);
-    Genome      mutateGenome(const Genome &parent, float mutationRate, Rng &rng);
+    std::string mutateAllele(const std::string &s, float rate, const class Rng &rng);
+    Genome      mutateGenome(const Genome &parent, float mutationRate, const Rng &rng);
 } // namespace evo
