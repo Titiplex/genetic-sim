@@ -2,6 +2,8 @@
 #include <vector>
 #include "Math.hpp"
 
+#include <cstdint>
+
 namespace evo
 {
     struct BiomassPulse
@@ -37,6 +39,13 @@ namespace evo
             [[nodiscard]] const std::vector<BiomassPulse> &pulses() const
             {
                 return m_pulses;
+            }
+
+            void reset(uint64_t seed)
+            {
+                time = 0.f;
+                // reset biomass grid si tu en as une
+                (void)seed;
             }
 
         private:

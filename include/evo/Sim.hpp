@@ -84,6 +84,37 @@ namespace evo
             float worldRadius      = 80.f;
             int   targetPopulation = 180;
 
+            struct RuntimeStats
+            {
+                int   organisms  = 0;
+                int   totalCells = 0;
+                float avgCells   = 0.f;
+
+                // histogramme modes (K fixé dans Phenotype::K)
+                std::array<int, Phenotype::K> modeCounts{};
+            };
+
+            std::vector<Organism> &organismsMut()
+            {
+                return m_orgs;
+            }
+
+            Environment &envMut()
+            {
+                return m_env;
+            }
+
+            void reset(const uint64_t seed, const int initialPop)
+            {
+                m_rng    = Rng(seed);
+                m_nextId = 1;
+                m_env.reset(seed);
+                seedInitial(initialPop);
+            }
+
+            RuntimeStats computeStats() const;
+            static Vec3  centerOfMass(const Organism &o);
+
         private:
             Environment           m_env;
             std::vector<Organism> m_orgs;
@@ -98,7 +129,6 @@ namespace evo
             void             buildGrid();
             std::vector<int> nearby(const Vec3 &p);
 
-            static Vec3 centerOfMass(const Organism &o);
             static Vec3 localCOM(const Organism &o);
             static void recenterLocalBody(Organism &o);
 

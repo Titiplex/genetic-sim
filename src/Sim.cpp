@@ -714,4 +714,20 @@ namespace evo
             c.modeId      = chooseCellMode(o, wp, c.localPos, c.age, i);
         }
     }
+
+    Sim::RuntimeStats Sim::computeStats() const
+    {
+        RuntimeStats s;
+        s.organisms = static_cast<int>(m_orgs.size());
+        int cells   = 0;
+        for (const auto &o : m_orgs)
+        {
+            cells += static_cast<int>(o.cells.size());
+            for (const auto &c : o.cells)
+                s.modeCounts[static_cast<size_t>(c.modeId)]++;
+        }
+        s.totalCells = cells;
+        s.avgCells   = s.organisms > 0 ? static_cast<float>(cells) / static_cast<float>(s.organisms) : 0.f;
+        return s;
+    }
 } // namespace evo
